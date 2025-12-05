@@ -1,5 +1,6 @@
-streamlit==1.28.0
-pandas==2.0.3
-numpy==1.24.3
-plotly==5.16.1
-openpyxl==3.1.2
+streamlit>=1.32
+pandas
+numpy
+openpyxl
+python-dateutil
+pytz
