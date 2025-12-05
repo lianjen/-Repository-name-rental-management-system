@@ -292,18 +292,18 @@ def main():
             st.metric("活躍房間", len(tenants_df), "間")
         
         with col2:
-            total_monthly = tenants_df['monthly_rent'].sum()
+            total_monthly = tenants_df['monthly_rent'].sum() if not tenants_df.empty else 0
             st.metric("月收租預估", f"NT${total_monthly:,.0f}", "")
         
         with col3:
-            total_deposit = tenants_df['deposit'].sum()
+            total_deposit = tenants_df['deposit'].sum() if not tenants_df.empty else 0
             st.metric("押金總額", f"NT${total_deposit:,.0f}", "")
         
         with col4:
             st.metric("房貸月付", "NT$39,185", "")
         
         with col5:
-            net_monthly = total_monthly - 39185
+            net_monthly = total_monthly - 39185 if total_monthly > 0 else 0
             st.metric("預估月淨收", f"NT${net_monthly:,.0f}", "")
         
         # 待辦事項
@@ -328,10 +328,12 @@ def main():
                         st.warning(f"🔴 {row['room_number']} ({row['tenant_name']}) - 剩餘 {days_left} 天")
                 else:
                     st.info("✅ 近期無租約到期")
+            else:
+                st.info("請先新增租客")
         
         with col2:
             st.write("**空房狀態**")
-            active_rooms = len(tenants_df[tenants_df['is_active'] == 1])
+            active_rooms = len(tenants_df[tenants_df['is_active'] == 1]) if not tenants_df.empty else 0
             empty_rooms = 10 - active_rooms
             
             if empty_rooms > 0:
@@ -340,7 +342,7 @@ def main():
                 st.success(f"✅ 滿房 {active_rooms}/10 間")
     
     # ================================================================
-    # 2. 租客管理 (已改進)
+    # 2. 租客管理 (已改進 - 修復 pandas 相容性)
     # ================================================================
     
     elif menu == "👥 租客管理":
@@ -353,12 +355,11 @@ def main():
             tenants_df = db.get_all_tenants()
             
             if not tenants_df.empty:
-                # 重新格式化顯示
+                # 簡化顯示 - 直接用原始 DataFrame
                 display_df = tenants_df[[
                     'room_number', 'tenant_name', 'phone', 'monthly_rent',
                     'deposit', 'payment_method', 'lease_end'
                 ]].copy()
-                display_df.columns = ['房號', '租客姓名', '電話', '月租', '押金', '繳租方式', '租期至']
                 
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
             else:
@@ -406,78 +407,77 @@ def main():
             tenants_df = db.get_all_tenants()
             
             if not tenants_df.empty:
-                # 快速編輯表格
-                st.write("**使用下方表格快速編輯租客資訊**")
+                # 方法 1: 選擇租客進行編輯
+                st.write("**第一步：選擇要編輯的租客**")
                 
-                edit_df = tenants_df[[
-                    'id', 'room_number', 'tenant_name', 'phone', 'monthly_rent', 
-                    'deposit', 'payment_method', 'lease_end', 'prepaid_electricity'
-                ]].copy()
+                tenant_options = {f"{row['room_number']} - {row['tenant_name']}": row['id'] for _, row in tenants_df.iterrows()}
+                selected_tenant_label = st.selectbox("選擇租客", list(tenant_options.keys()))
+                selected_tenant_id = tenant_options[selected_tenant_label]
                 
-                edit_df.columns = ['ID', '房號', '姓名', '電話', '月租', '押金', '繳租方式', '租期至', '預收電費']
+                # 獲取選中租客的詳細資料
+                tenant_data = db.get_tenant_by_id(selected_tenant_id).iloc[0]
                 
-                edited_df = st.data_editor(
-                    edit_df,
-                    key="tenant_editor",
-                    column_config={
-                        "房號": st.column_config.TextColumn(disabled=True),
-                        "ID": st.column_config.NumberColumn(disabled=True),
-                        "月租": st.column_config.NumberColumn(min_value=0),
-                        "押金": st.column_config.NumberColumn(min_value=0),
-                        "預收電費": st.column_config.NumberColumn(min_value=0),
-                    },
-                    hide_index=True
-                )
+                action = st.radio("選擇操作", ["📝 編輯資料", "🚨 刪除/退租"], horizontal=True)
                 
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if st.button("💾 保存所有修改", key="save_tenants"):
-                        for idx, row in edited_df.iterrows():
-                            original_row = tenants_df[tenants_df['id'] == row['ID']].iloc[0]
-                            
-                            db.update_tenant(
-                                int(row['ID']),
-                                row['姓名'],
-                                row['電話'],
-                                row['押金'],
-                                row['月租'],
-                                original_row['lease_start'],
-                                row['租期至'],
-                                row['繳租方式'],
-                                int(row['預收電費']),
-                                ""
-                            )
+                if action == "📝 編輯資料":
+                    st.write("**第二步：編輯租客資訊**")
+                    
+                    with st.form("edit_tenant_form"):
+                        col1, col2 = st.columns(2)
                         
-                        st.success("✅ 所有修改已保存")
-                        st.rerun()
+                        with col1:
+                            st.text_input("房號 (不可修改)", value=tenant_data['room_number'], disabled=True)
+                            new_name = st.text_input("租客姓名", value=tenant_data['tenant_name'])
+                            new_phone = st.text_input("聯絡電話", value=tenant_data['phone'])
+                            new_rent = st.number_input("月租金", min_value=0, step=100, value=int(tenant_data['monthly_rent']))
+                        
+                        with col2:
+                            new_deposit = st.number_input("押金", min_value=0, step=100, value=int(tenant_data['deposit']))
+                            new_payment_method = st.selectbox("繳租方式", ["月繳", "半年繳", "年繳"], 
+                                                             index=["月繳", "半年繳", "年繳"].index(tenant_data['payment_method']))
+                            new_prepaid = st.number_input("預收電費", min_value=0, step=100, value=int(tenant_data['prepaid_electricity']))
+                        
+                        new_notes = st.text_area("備註", value=tenant_data['notes'] if tenant_data['notes'] else "")
+                        
+                        if st.form_submit_button("💾 保存修改"):
+                            if db.update_tenant(
+                                selected_tenant_id,
+                                new_name,
+                                new_phone,
+                                new_deposit,
+                                new_rent,
+                                tenant_data['lease_start'],
+                                tenant_data['lease_end'],
+                                new_payment_method,
+                                new_prepaid,
+                                new_notes
+                            ):
+                                st.success("✅ 資料已更新")
+                                st.rerun()
+                            else:
+                                st.error("❌ 更新失敗")
                 
-                with col2:
-                    st.write("")
-                
-                # 刪除或標記為歷史租客
-                st.write("---")
-                st.subheader("🚨 刪除/退租租客")
-                
-                tenant_to_delete = st.selectbox(
-                    "選擇要退租/刪除的租客",
-                    options=tenants_df['id'].tolist(),
-                    format_func=lambda x: f"{tenants_df[tenants_df['id']==x]['room_number'].values[0]} - {tenants_df[tenants_df['id']==x]['tenant_name'].values[0]}"
-                )
-                
-                delete_type = st.radio("刪除類型", ["標記為歷史租客 (推薦)", "永久刪除 (謹慎)"])
-                
-                if delete_type == "標記為歷史租客 (推薦)":
-                    if st.button("確認標記為歷史租客", key="mark_history"):
-                        if db.delete_tenant(tenant_to_delete, mark_history=True):
-                            st.success("✅ 已標記為歷史租客，房間已釋放")
-                            st.rerun()
-                
-                else:
-                    if st.button("🚨 確認永久刪除", key="delete_permanent", type="secondary"):
-                        if db.delete_tenant(tenant_to_delete, mark_history=False):
-                            st.error("❌ 租客已永久刪除")
-                            st.rerun()
+                else:  # action == "🚨 刪除/退租"
+                    st.write("**第二步：選擇刪除方式**")
+                    st.warning("⚠️ 此操作無法復原，請謹慎操作")
+                    
+                    delete_type = st.radio(
+                        "刪除類型",
+                        ["📋 標記為歷史租客 (推薦 - 保留記錄)", "🗑️ 永久刪除 (不保留記錄)"],
+                        help="推薦使用「標記為歷史租客」，這樣可以保留收租記錄用於查帳"
+                    )
+                    
+                    if delete_type == "📋 標記為歷史租客 (推薦 - 保留記錄)":
+                        if st.button("✅ 確認標記為歷史租客"):
+                            if db.delete_tenant(selected_tenant_id, mark_history=True):
+                                st.success(f"✅ 已標記 {tenant_data['tenant_name']} 為歷史租客，房間已釋放")
+                                st.rerun()
+                    
+                    else:
+                        if st.button("🚨 確認永久刪除", type="secondary"):
+                            if db.delete_tenant(selected_tenant_id, mark_history=False):
+                                st.error(f"❌ 租客 {tenant_data['tenant_name']} 資料已永久刪除")
+                                st.rerun()
             
             else:
                 st.info("沒有可編輯的租客")
@@ -496,31 +496,30 @@ def main():
             
             tenants_df = db.get_all_tenants()
             
-            with st.form("payment_form"):
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if not tenants_df.empty:
+            if not tenants_df.empty:
+                with st.form("payment_form"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
                         room_num = st.selectbox("房號", tenants_df['room_number'].tolist())
                         selected_tenant = tenants_df[tenants_df['room_number'] == room_num].iloc[0]
                         default_rent = selected_tenant['monthly_rent']
-                    else:
-                        st.error("請先新增租客")
-                        default_rent = 0
+                        
+                        year = st.number_input("年份", value=2025, min_value=2020)
                     
-                    year = st.number_input("年份", value=2025, min_value=2020)
-                
-                with col2:
-                    month = st.number_input("月份", value=datetime.now().month, min_value=1, max_value=12)
-                    amount_paid = st.number_input("收租金額", min_value=0, step=100, value=int(default_rent))
-                
-                payment_status = st.selectbox("狀態", ["已收", "預收", "逾期", "部分收"])
-                notes = st.text_area("備註 (如轉帳後五碼)")
-                
-                if st.form_submit_button("✅ 記錄收租"):
-                    if db.record_payment(room_num, year, month, default_rent, amount_paid, payment_status, notes):
-                        st.success(f"✅ 已記錄 {room_num} {year}年{month}月的收租")
-                        st.rerun()
+                    with col2:
+                        month = st.number_input("月份", value=datetime.now().month, min_value=1, max_value=12)
+                        amount_paid = st.number_input("收租金額", min_value=0, step=100, value=int(default_rent))
+                    
+                    payment_status = st.selectbox("狀態", ["已收", "預收", "逾期", "部分收"])
+                    notes = st.text_area("備註 (如轉帳後五碼)")
+                    
+                    if st.form_submit_button("✅ 記錄收租"):
+                        if db.record_payment(room_num, year, month, default_rent, amount_paid, payment_status, notes):
+                            st.success(f"✅ 已記錄 {room_num} {year}年{month}月的收租")
+                            st.rerun()
+            else:
+                st.error("請先在租客管理中新增租客")
         
         with tab2:
             st.subheader("📅 本月預期收入預測")
@@ -726,7 +725,7 @@ def main():
         with tab3:
             st.subheader("系統信息")
             
-            st.write("**系統名稱:** 幸福之家租金管理系統 v2.0")
+            st.write("**系統名稱:** 幸福之家租金管理系統 v2.1")
             st.write("**開發時間:** 2025年12月")
             st.write("**版本特性:** ")
             st.write("  ✅ 租客管理 (含編輯/刪除)")
@@ -744,4 +743,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
