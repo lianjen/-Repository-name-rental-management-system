@@ -1,9 +1,9 @@
 """
-幸福之家管理系統 Pro v5.0.1 - 完整電費管理版 (完全修復版)
+幸福之家管理系統 Pro v5.0.2 - 完全修復版 (房客編輯BUG修復)
 架構: 模組化設計 (DB層 + 業務邏輯層 + UI層)
 功能: 租客管理、租金收繳、電費管理、支出記帳、智能預測
 特性: 電費預繳追蹤、防重複收款、性能優化、完整錯誤處理
-【重要】本版本包含完整的自動資料庫修復機制，啟動時自動修復舊版本DB
+【重要】完全修復編輯房客時資料混亂與存檔報錯問題
 """
 
 import streamlit as st
@@ -41,19 +41,17 @@ class DatabaseRepair:
         """自動修復資料庫"""
         
         if not os.path.exists(db_path):
-            return True  # 新資料庫，無需修復
+            return True
         
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             
-            # 檢查 tenants 表是否存在
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tenants'")
             if not cursor.fetchone():
                 conn.close()
-                return True  # 新資料庫
+                return True
             
-            # 檢查並添加缺失欄位到 tenants
             cursor.execute("PRAGMA table_info(tenants)")
             existing_cols = {row[1] for row in cursor.fetchall()}
             
@@ -69,7 +67,6 @@ class DatabaseRepair:
                     cursor.execute(f"ALTER TABLE tenants ADD COLUMN {col_name} {col_type}")
                     logging.info(f"Added column {col_name} to tenants")
             
-            # 檢查並添加欄位到 payments
             cursor.execute("PRAGMA table_info(payments)")
             payment_cols = {row[1] for row in cursor.fetchall()}
             
@@ -81,7 +78,6 @@ class DatabaseRepair:
                 cursor.execute("ALTER TABLE payments ADD COLUMN electricity_fee REAL DEFAULT 0")
                 logging.info("Added column electricity_fee to payments")
             
-            # 建立電費表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_prepaid (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,7 +105,6 @@ class DatabaseRepair:
                 )
             """)
             
-            # 建立索引
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tenants_room ON tenants(room_number)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tenants_active ON tenants(is_active)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_payments_room ON payments(room_number)")
@@ -142,9 +137,7 @@ class RentalDB:
     """數據庫操作類 - 負責所有資料讀寫"""
     
     def __init__(self, db_path: str = "rental_system_12rooms.db"):
-        # 首先執行修復
         DatabaseRepair.repair_db(db_path)
-        
         self.db_path = db_path
         self._init_db()
         self._create_indexes()
@@ -171,7 +164,6 @@ class RentalDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
-            # 租客表 (包含所有欄位)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tenants (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,7 +187,6 @@ class RentalDB:
                 )
             """)
             
-            # 繳費表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -213,7 +204,6 @@ class RentalDB:
                 )
             """)
             
-            # 電費預繳表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_prepaid (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -227,7 +217,6 @@ class RentalDB:
                 )
             """)
             
-            # 電費調整表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_adjustments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -242,7 +231,6 @@ class RentalDB:
                 )
             """)
             
-            # 支出表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS expenses (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -294,7 +282,6 @@ class RentalDB:
                 cursor = conn.cursor()
                 
                 if tenant_id:
-                    # 更新 - 必須包含 updated_at
                     sql = """
                         UPDATE tenants SET 
                             tenant_name=?, phone=?, deposit=?, base_rent=?, electricity_fee=?,
@@ -307,9 +294,8 @@ class RentalDB:
                               start, end, pay_method, int(discount_months), 
                               bool(has_water_discount), prepaid_electricity, notes, tenant_id)
                     cursor.execute(sql, params)
-                    logging.info(f"Update tenant: {room} (base={base_rent}, elec={electricity_fee})")
+                    logging.info(f"Update tenant: {room} (id={tenant_id})")
                 else:
-                    # 新增
                     sql = """
                         INSERT INTO tenants 
                         (room_number, tenant_name, phone, deposit, base_rent, electricity_fee,
@@ -321,7 +307,7 @@ class RentalDB:
                               start, end, pay_method, int(discount_months), 
                               bool(has_water_discount), prepaid_electricity, notes)
                     cursor.execute(sql, params)
-                    logging.info(f"Create tenant: {room} (base={base_rent}, elec={electricity_fee})")
+                    logging.info(f"Create tenant: {room}")
                 
                 return True, "成功保存"
                 
@@ -398,7 +384,7 @@ class RentalDB:
                 """, (room, payment_schedule, base_rent, electricity_fee, amount, 
                       due_date, today, status, notes))
             
-            logging.info(f"Record payment: {room} / {payment_schedule} / base={base_rent}, elec={electricity_fee}")
+            logging.info(f"Record payment: {room} / {payment_schedule}")
             return True, "成功記錄"
             
         except sqlite3.IntegrityError:
@@ -422,8 +408,6 @@ class RentalDB:
             logging.error(f"get_payment_history error: {e}")
             return pd.DataFrame()
 
-    # ===== 電費操作 =====
-    
     def add_electricity_prepaid(self, room: str, prepaid_amount: float,
                                remaining_balance: float, notes: str) -> Tuple[bool, str]:
         """記錄電費預繳"""
@@ -461,7 +445,7 @@ class RentalDB:
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (room, adjustment_month, old_fee, new_fee, reason, applied_date))
             
-            logging.info(f"Adjust electricity: {room} / {old_fee} → {new_fee} ({reason})")
+            logging.info(f"Adjust electricity: {room} / {old_fee} → {new_fee}")
             return True, f"成功調整電費: ${old_fee:,.0f} → ${new_fee:,.0f}"
         except Exception as e:
             logging.error(f"adjust_electricity_fee error: {e}")
@@ -481,8 +465,6 @@ class RentalDB:
             logging.error(f"get_electricity_prepaid_history error: {e}")
             return pd.DataFrame()
 
-    # ===== 支出操作 =====
-    
     def add_expense(self, date_str: str, category: str, amount: float,
                    desc: str, room: str) -> Tuple[bool, str]:
         """添加支出"""
@@ -682,67 +664,25 @@ def page_dashboard(db: RentalDB) -> None:
                 st.error(f"**{room}**\n\n(空房)")
 
 def page_tenants(db: RentalDB) -> None:
-    """房客管理頁面"""
+    """房客管理頁面 - 完全修復版"""
+    
+    # 初始化 session_state
+    if "tenant_edit_id" not in st.session_state:
+        st.session_state.tenant_edit_id = None
+    
     col1, col2 = st.columns([4, 1])
     with col1:
         st.header("房客資料庫")
     with col2:
         if st.button("➕ 新增房客", type="primary", use_container_width=True):
-            st.session_state.edit_mode = False
-            st.session_state.edit_tenant_id = None
+            st.session_state.tenant_edit_id = None
             st.rerun()
 
     tenants = db.get_tenants()
     
-    if not tenants.empty:
-        for idx, (_, row) in enumerate(tenants.iterrows()):
-            water_badge = " 💧 含100元水費折扣" if row['has_water_discount'] else ""
-            discount_badge = f" 💰 年繳折{row['annual_discount_months']}個月" if row['annual_discount_months'] > 0 else ""
-            prepaid_badge = f" 📌 預繳 ${row['prepaid_electricity']:,.0f}" if row['prepaid_electricity'] > 0 else ""
-            
-            pay_method_badge = {
-                '月繳': '📅 月繳',
-                '半年繳': '📅📅 半年繳',
-                '年繳': '📅📅📅 年繳'
-            }.get(row['payment_method'], row['payment_method'])
-            
-            with st.expander(f"**{row['room_number']} - {row['tenant_name']}** ({pay_method_badge} ${row['monthly_rent']:,.0f}){water_badge}{discount_badge}{prepaid_badge}"):
-                c1, c2, c3 = st.columns(3)
-                
-                c1.write(f"📞 {row['phone']}")
-                c2.write(f"📅 到期: {row['lease_end']}")
-                c1.write(f"**基礎月租:** ${row['base_rent']:,.0f}")
-                c1.write(f"**月電費:** ${row['electricity_fee']:,.0f}")
-                
-                c2.write(f"**繳租方式:** {row['payment_method']}")
-                c2.write(f"**月度應繳:** ${row['monthly_rent']:,.0f}")
-                
-                if row['has_water_discount']:
-                    c1.write("**水費:** 已含100元折扣")
-                
-                if row['prepaid_electricity'] > 0:
-                    c3.write(f"**預繳餘額:** ${row['prepaid_electricity']:,.0f}")
-                
-                b1, b2 = c3.columns(2)
-                if b1.button("✏️ 編輯", key=f"edit_btn_{row['id']}"):
-                    st.session_state.edit_mode = True
-                    st.session_state.edit_tenant_id = row['id']
-                    st.rerun()
-                
-                if b2.button("🗑️ 刪除", key=f"del_btn_{row['id']}"):
-                    ok, msg = db.delete_tenant(row['id'])
-                    if ok:
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.error(msg)
-    else:
-        st.info("尚無租客，請點擊右上方新增。")
-
-    st.divider()
-    
-    if st.session_state.edit_mode and st.session_state.edit_tenant_id:
-        curr_df = db.get_tenant_by_id(st.session_state.edit_tenant_id)
+    # ===== 編輯模式 =====
+    if st.session_state.tenant_edit_id is not None:
+        curr_df = db.get_tenant_by_id(st.session_state.tenant_edit_id)
         
         if curr_df.empty:
             st.error("❌ 找不到該租客資料")
@@ -750,18 +690,21 @@ def page_tenants(db: RentalDB) -> None:
             curr = curr_df.iloc[0].to_dict()
             st.subheader(f"✏️ 編輯房客 - {curr['room_number']} {curr['tenant_name']}")
             
-            with st.form("edit_tenant_form"):
+            # 調試信息
+            st.info(f"編輯ID: {st.session_state.tenant_edit_id} | 房號: {curr['room_number']}")
+            
+            with st.form(f"edit_form_{st.session_state.tenant_edit_id}"):
                 c1, c2 = st.columns(2)
                 
                 with c1:
                     st.text_input("房號 (不可修改)", value=curr['room_number'], disabled=True)
-                    name = st.text_input("姓名", value=curr['tenant_name'], key="edit_name")
-                    phone = st.text_input("電話", value=str(curr['phone']) if curr['phone'] else "", key="edit_phone")
-                    deposit = st.number_input("押金", value=float(curr['deposit']), key="edit_deposit")
+                    name = st.text_input("姓名", value=curr['tenant_name'], key=f"edit_name_{st.session_state.tenant_edit_id}")
+                    phone = st.text_input("電話", value=str(curr['phone']) if curr['phone'] else "", key=f"edit_phone_{st.session_state.tenant_edit_id}")
+                    deposit = st.number_input("押金", value=float(curr['deposit']), key=f"edit_deposit_{st.session_state.tenant_edit_id}")
                 
                 with c2:
-                    base_rent = st.number_input("基礎月租金", value=float(curr['base_rent']), key="edit_base_rent")
-                    electricity_fee = st.number_input("月電費估價", value=float(curr['electricity_fee']), key="edit_elec_fee")
+                    base_rent = st.number_input("基礎月租金", value=float(curr['base_rent']), key=f"edit_base_rent_{st.session_state.tenant_edit_id}")
+                    electricity_fee = st.number_input("月電費估價", value=float(curr['electricity_fee']), key=f"edit_elec_fee_{st.session_state.tenant_edit_id}")
                     
                     default_start = date.today()
                     try:
@@ -775,38 +718,38 @@ def page_tenants(db: RentalDB) -> None:
                     except:
                         pass
 
-                    start = st.date_input("起租日", value=default_start, key="edit_start")
-                    end = st.date_input("到期日", value=default_end, key="edit_end")
+                    start = st.date_input("起租日", value=default_start, key=f"edit_start_{st.session_state.tenant_edit_id}")
+                    end = st.date_input("到期日", value=default_end, key=f"edit_end_{st.session_state.tenant_edit_id}")
                     
                     pay_method_idx = 0
                     if curr['payment_method'] in ["月繳", "半年繳", "年繳"]:
                         pay_method_idx = ["月繳", "半年繳", "年繳"].index(curr['payment_method'])
                     
                     pay_method = st.selectbox("繳費方式", ["月繳", "半年繳", "年繳"], 
-                                            index=pay_method_idx, key="edit_paymethod")
+                                            index=pay_method_idx, key=f"edit_paymethod_{st.session_state.tenant_edit_id}")
 
                 col_discount = st.columns([2, 2])
                 with col_discount[0]:
                     discount_months = st.number_input(
                         "年繳折幾個月", 
                         value=int(curr['annual_discount_months']) if curr['annual_discount_months'] else 0, 
-                        min_value=0, max_value=12, key="edit_discount"
+                        min_value=0, max_value=12, key=f"edit_discount_{st.session_state.tenant_edit_id}"
                     )
                 
                 with col_discount[1]:
                     has_water_discount = st.checkbox(
                         "☑️ 含100元水費折扣",
                         value=bool(curr['has_water_discount']),
-                        key="edit_water_discount"
+                        key=f"edit_water_discount_{st.session_state.tenant_edit_id}"
                     )
 
                 prepaid_elec = st.number_input(
                     "電費預繳餘額", 
                     value=float(curr['prepaid_electricity']) if curr['prepaid_electricity'] else 0, 
-                    key="edit_prepaid_elec"
+                    key=f"edit_prepaid_elec_{st.session_state.tenant_edit_id}"
                 )
 
-                notes = st.text_area("備註", value=str(curr['notes']) if curr['notes'] else "", key="edit_notes")
+                notes = st.text_area("備註", value=str(curr['notes']) if curr['notes'] else "", key=f"edit_notes_{st.session_state.tenant_edit_id}")
                 
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
@@ -822,22 +765,68 @@ def page_tenants(db: RentalDB) -> None:
                             curr['room_number'], name, phone, deposit, base_rent, electricity_fee,
                             start.strftime("%Y.%m.%d"), end.strftime("%Y.%m.%d"), 
                             pay_method, discount_months, has_water_discount, prepaid_elec, notes, 
-                            st.session_state.edit_tenant_id
+                            st.session_state.tenant_edit_id
                         )
                         if ok:
                             st.success("✅ " + msg)
-                            st.session_state.edit_mode = False
-                            st.session_state.edit_tenant_id = None
+                            st.session_state.tenant_edit_id = None
                             st.rerun()
                         else:
                             st.error("❌ " + msg)
                 
                 if cancel:
-                    st.session_state.edit_mode = False
-                    st.session_state.edit_tenant_id = None
+                    st.session_state.tenant_edit_id = None
                     st.rerun()
     
-    elif not st.session_state.edit_mode:
+    # ===== 新增模式 =====
+    elif st.session_state.tenant_edit_id is None and len(tenants) >= 0:
+        # 顯示租客列表
+        if not tenants.empty:
+            st.subheader("現有房客")
+            for idx, (_, row) in enumerate(tenants.iterrows()):
+                water_badge = " 💧 含100元水費折扣" if row['has_water_discount'] else ""
+                discount_badge = f" 💰 年繳折{row['annual_discount_months']}個月" if row['annual_discount_months'] > 0 else ""
+                prepaid_badge = f" 📌 預繳 ${row['prepaid_electricity']:,.0f}" if row['prepaid_electricity'] > 0 else ""
+                
+                pay_method_badge = {
+                    '月繳': '📅 月繳',
+                    '半年繳': '📅📅 半年繳',
+                    '年繳': '📅📅📅 年繳'
+                }.get(row['payment_method'], row['payment_method'])
+                
+                with st.expander(f"**{row['room_number']} - {row['tenant_name']}** ({pay_method_badge} ${row['monthly_rent']:,.0f}){water_badge}{discount_badge}{prepaid_badge}"):
+                    c1, c2, c3 = st.columns(3)
+                    
+                    c1.write(f"📞 {row['phone']}")
+                    c2.write(f"📅 到期: {row['lease_end']}")
+                    c1.write(f"**基礎月租:** ${row['base_rent']:,.0f}")
+                    c1.write(f"**月電費:** ${row['electricity_fee']:,.0f}")
+                    
+                    c2.write(f"**繳租方式:** {row['payment_method']}")
+                    c2.write(f"**月度應繳:** ${row['monthly_rent']:,.0f}")
+                    
+                    if row['has_water_discount']:
+                        c1.write("**水費:** 已含100元折扣")
+                    
+                    if row['prepaid_electricity'] > 0:
+                        c3.write(f"**預繳餘額:** ${row['prepaid_electricity']:,.0f}")
+                    
+                    b1, b2 = c3.columns(2)
+                    if b1.button("✏️ 編輯", key=f"edit_btn_{row['id']}"):
+                        st.session_state.tenant_edit_id = row['id']
+                        st.rerun()
+                    
+                    if b2.button("🗑️ 刪除", key=f"del_btn_{row['id']}"):
+                        ok, msg = db.delete_tenant(row['id'])
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+        else:
+            st.info("尚無租客，請點擊右上方新增。")
+
+        st.divider()
         st.subheader("➕ 新增房客")
         
         with st.form("add_tenant_form"):
@@ -929,7 +918,6 @@ def page_payments(db: RentalDB) -> None:
         cols = st.columns(3)
         for i, f in enumerate(unpaid):
             with cols[i % 3]:
-                water_badge = "💧" if f['water'] else ""
                 st.markdown(f"""
                 <div style="background-color: #ffe6e6; border-left: 4px solid #ff4444; border-radius: 8px; padding: 12px;">
                     <div style="font-weight: bold;">{f['room']} {f['name']}</div>
@@ -944,7 +932,6 @@ def page_payments(db: RentalDB) -> None:
         cols = st.columns(3)
         for i, f in enumerate(paid_list):
             with cols[i % 3]:
-                water_badge = "💧" if f['water'] else ""
                 st.markdown(f"""
                 <div style="background-color: #e6ffe6; border-left: 4px solid #44ff44; border-radius: 8px; padding: 12px;">
                     <div style="font-weight: bold;">{f['room']} {f['name']}</div>
@@ -993,7 +980,6 @@ def page_payments(db: RentalDB) -> None:
         detail_data = []
         for f in forecast:
             if f['should_collect']:
-                water_label = "✅ 有折" if f['water'] else "❌"
                 status = "✅ 已收" if f['paid'] else "🔴 未繳"
                 detail_data.append({
                     '房號': f['room'], '租客': f['name'], '繳租方式': f['method'],
@@ -1187,13 +1173,13 @@ def page_settings() -> None:
     with col1:
         st.subheader("系統信息")
         st.info("""
-        **幸福之家管理系統 Pro v5.0.1**
+        **幸福之家管理系統 Pro v5.0.2**
         
-        ✨ **完整修復版**
-        • 自動資料庫修復
-        • 完全相容舊版本DB
-        • 電費分離計算
-        • 電費預繳追蹤
+        ✨ **房客編輯完全修復**
+        • 編輯狀態完全隔離
+        • 表單 key 唯一化
+        • 資料加載準確
+        • 存檔正常無誤
         
         🏠 **租金管理**
         • 基礎租金 + 電費分離
@@ -1213,13 +1199,13 @@ def page_settings() -> None:
     with col2:
         st.subheader("功能特性")
         st.success("""
+        ✅ 點擊編輯正確房間
+        ✅ 編輯頁面顯示正確資料
+        ✅ 修改後可正常存檔
         ✅ 自動資料庫修復
-        ✅ 房客編輯存檔正常
         ✅ 租金與電費分離
         ✅ 電費預繳管理
-        ✅ 電費調整追蹤
         ✅ 防重複入帳
-        ✅ 完整錯誤處理
         ✅ 歷史記錄完整
         """)
 
@@ -1243,16 +1229,11 @@ def main():
     </style>
     """, unsafe_allow_html=True)
     
-    if 'edit_mode' not in st.session_state:
-        st.session_state.edit_mode = False
-    if 'edit_tenant_id' not in st.session_state:
-        st.session_state.edit_tenant_id = None
-
     db = RentalDB()
 
     with st.sidebar:
         st.title("🏠 幸福之家")
-        st.caption("智慧租房管理系統 Pro v5.0.1 (完全修復版)")
+        st.caption("智慧租房管理系統 Pro v5.0.2 (房客編輯完全修復)")
         menu = st.radio("功能導航", 
                        ["📊 總覽儀表板", "👥 房客管理", "💰 租金收繳", "⚡ 電費管理", "💸 支出記帳", "⚙️ 系統設定"], 
                        index=0)
