@@ -55,7 +55,6 @@ class RentalDB:
         cursor = conn.cursor()
         
         try:
-            # 租客表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tenants (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,7 +75,6 @@ class RentalDB:
                 )
             """)
             
-            # 繳費表 (新增 payment_schedule 欄位)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,7 +89,6 @@ class RentalDB:
                 )
             """)
             
-            # 支出表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS expenses (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -242,7 +239,7 @@ class RentalDB:
         finally:
             conn.close()
 
-    def get_payment_history(self, room=None, limit=20):
+    def get_payment_history(self, room=None, limit=30):
         """獲取繳費歷史"""
         conn = self.get_connection()
         try:
@@ -318,7 +315,7 @@ def main():
 
     with st.sidebar:
         st.title("🏠 幸福之家")
-        st.caption("智慧租房管理系統 Pro v3.5")
+        st.caption("智慧租房管理系統 Pro v3.6")
         menu = st.radio("功能導航", 
                        ["📊 總覽儀表板", "👥 房客管理", "💰 租金收繳", "💸 支出記帳", "⚙️ 系統設定"], 
                        index=0)
@@ -330,7 +327,6 @@ def main():
         
         tenants = db.get_tenants()
         
-        # 關鍵指標
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -352,7 +348,6 @@ def main():
 
         st.divider()
         
-        # 房間狀態網格
         st.subheader("🏢 房源狀態監控")
         active_rooms = tenants['room_number'].tolist() if not tenants.empty else []
         
@@ -447,7 +442,6 @@ def main():
         else:
             st.info("尚無租客，請點擊右上方新增。")
 
-        # 表單區域
         st.divider()
         
         if st.session_state.edit_mode:
@@ -500,7 +494,6 @@ def main():
                             pay_method = st.selectbox("繳費方式", ["月繳", "半年繳", "年繳"], 
                                                     index=pay_method_idx, key="edit_paymethod")
 
-                        # 年繳折扣 + 水費折扣
                         col_discount = st.columns([2, 2])
                         with col_discount[0]:
                             discount_months = st.number_input(
@@ -549,7 +542,6 @@ def main():
                             st.session_state.edit_tenant_id = None
                             st.rerun()
         else:
-            # 新增模式
             st.subheader("➕ 新增房客")
             
             with st.expander("📖 繳租方式說明", expanded=False):
@@ -570,14 +562,6 @@ def main():
                 - ✅ 簽約時繳 12 個月、到期時新約再繳
                 - 金額：月租 × 12 (例如 4,000 × 12 = 48,000 元)
                 - 繳費次數：1 次 (簽約時)
-                
-                ### 💡 示例
-                
-                | 房間 | 月租 | 方式 | 簽約時繳 | 6個月後 | 12個月後(到期) |
-                |------|------|------|---------|--------|---------------|
-                | 2B | 4000 | 月繳 | 4000 | 4000 | 4000... |
-                | 2A | 6000 | 半年繳 | 36000 | 36000 | (續約) |
-                | 4B | 4000 | 年繳 | 48000 | - | (續約) |
                 """)
             
             with st.form("add_tenant_form"):
@@ -595,7 +579,6 @@ def main():
                     end = st.date_input("到期日", value=date.today() + timedelta(days=365), key="add_end")
                     pay_method = st.selectbox("繳費方式", ["月繳", "半年繳", "年繳"], key="add_paymethod")
 
-                # 年繳折扣 + 水費折扣
                 col_discount = st.columns([2, 2])
                 with col_discount[0]:
                     discount_months = st.number_input(
@@ -630,128 +613,256 @@ def main():
                         else:
                             st.error("❌ " + msg)
 
-    # --- 3. 租金收繳 (改為根據繳租方式) ---
+    # --- 3. 租金收繳 (優化版) ---
     elif menu == "💰 租金收繳":
-        st.header("租金收繳管理")
-        st.info("""
-        💡 **重要提醒：**
-        - **月繳房間** → 每個月都要收租
-        - **半年繳房間** → 簽約時收半年 (6月) 的錢，中途不用收，到期前再收最後半年
-        - **年繳房間** → 簽約時收全年 (12月) 的錢，期間不用催繳
-        """)
+        st.header("💰 租金收繳管理系統")
         
         tenants = db.get_tenants()
+        history = db.get_payment_history(limit=100)
         
-        tab1, tab2, tab3, tab4 = st.tabs(["📝 記錄收租", "📅 月繳房間", "📆 半年繳房間", "📊 繳費歷史"])
-        
-        with tab1:
-            st.subheader("記錄收租")
+        if tenants.empty:
+            st.error("❌ 請先在房客管理中新增租客")
+        else:
+            current_month = datetime.now().strftime("%Y-%m")
+            current_year = datetime.now().year
+            today = datetime.now()
             
-            if not tenants.empty:
-                with st.form("payment_form"):
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        room = st.selectbox("房號", tenants['room_number'].tolist(), key="pay_room")
-                        tenant_info = tenants[tenants['room_number'] == room].iloc[0]
-                        
-                        payment_amount = db.calculate_payment_amount(
-                            tenant_info['monthly_rent'],
-                            tenant_info['payment_method'],
-                            tenant_info['annual_discount_months']
-                        )
-                        
-                        st.write(f"**繳租方式:** {tenant_info['payment_method']}")
-                        st.write(f"**應繳金額:** ${payment_amount:,.0f}")
-                    
-                    with col2:
-                        payment_schedule = st.text_input("繳費期間", placeholder="例如：2025-12 (12月) 或 2025-07-12 (7月中旬到12月中旬)", key="pay_schedule")
-                        due_date = st.date_input("應繳日期", key="pay_due_date")
-                        amount_paid = st.number_input("實際收取金額", value=payment_amount, key="pay_amount")
-                    
-                    notes = st.text_area("備註 (如轉帳末五碼)", key="pay_notes")
-                    
-                    if st.form_submit_button("✅ 記錄收租", type="primary"):
-                        success, msg = db.record_payment(
-                            room,
-                            payment_schedule,
-                            amount_paid,
-                            due_date.strftime("%Y-%m-%d"),
-                            "已收",
-                            notes
-                        )
-                        if success:
-                            st.success(msg)
-                            st.rerun()
-                        else:
-                            st.error(msg)
-            else:
-                st.error("請先在房客管理中新增租客")
-        
-        with tab2:
-            st.subheader("📅 月繳房間 (每月都要收)")
-            
-            monthly_tenants = tenants[tenants['payment_method'] == '月繳']
-            
-            if not monthly_tenants.empty:
-                st.write(f"共 {len(monthly_tenants)} 間月繳房間")
-                
-                display_data = []
-                for _, row in monthly_tenants.iterrows():
-                    payment_amount = db.calculate_payment_amount(row['monthly_rent'], '月繳', row['annual_discount_months'])
-                    display_data.append({
-                        '房號': row['room_number'],
-                        '租客': row['tenant_name'],
-                        '月租': f"${row['monthly_rent']:,.0f}",
-                        '年繳折扣': f"{row['annual_discount_months']}個月" if row['annual_discount_months'] > 0 else "無",
-                        '每月應繳': f"${payment_amount:,.0f}"
-                    })
-                
-                st.dataframe(pd.DataFrame(display_data), width='stretch', hide_index=True)
-            else:
-                st.info("沒有月繳房間")
-        
-        with tab3:
-            st.subheader("📆 半年繳房間 (簽約時 + 到期前)")
-            
-            half_tenants = tenants[tenants['payment_method'] == '半年繳']
-            
-            if not half_tenants.empty:
-                st.write(f"共 {len(half_tenants)} 間半年繳房間")
-                
-                display_data = []
-                for _, row in half_tenants.iterrows():
-                    payment_amount = db.calculate_payment_amount(row['monthly_rent'], '半年繳', row['annual_discount_months'])
-                    start_date = datetime.strptime(row['lease_start'], "%Y.%m.%d")
-                    end_date = datetime.strptime(row['lease_end'], "%Y.%m.%d")
-                    mid_date = start_date + timedelta(days=180)
-                    
-                    display_data.append({
-                        '房號': row['room_number'],
-                        '租客': row['tenant_name'],
-                        '起租': row['lease_start'],
-                        '第一期應繳': f"${payment_amount:,.0f} (簽約時)",
-                        '第二期應繳': f"${payment_amount:,.0f} ({mid_date.strftime('%Y.%m.%d')}前)",
-                        '到期': row['lease_end']
-                    })
-                
-                st.dataframe(pd.DataFrame(display_data), width='stretch', hide_index=True)
-            else:
-                st.info("沒有半年繳房間")
-        
-        with tab4:
-            st.subheader("📊 繳費歷史")
-            
-            history = db.get_payment_history(limit=30)
-            
-            if not history.empty:
-                st.dataframe(
-                    history[['room_number', 'payment_schedule', 'payment_amount', 'payment_date', 'status', 'notes']],
-                    width='stretch',
-                    hide_index=True
+            # ===== 本月預測 =====
+            monthly_forecast = []
+            for _, row in tenants.iterrows():
+                payment_amount = db.calculate_payment_amount(
+                    row['monthly_rent'],
+                    row['payment_method'],
+                    row['annual_discount_months']
                 )
-            else:
-                st.info("尚無繳費記錄")
+                
+                # 判斷本月是否應該收租
+                should_collect = False
+                timing = ""
+                
+                if row['payment_method'] == '月繳':
+                    should_collect = True
+                    timing = "📅 每月"
+                elif row['payment_method'] == '半年繳':
+                    start_date = datetime.strptime(row['lease_start'], "%Y.%m.%d")
+                    months_since_start = (today.year - start_date.year) * 12 + (today.month - start_date.month)
+                    # 簽約月份或6個月後
+                    if months_since_start % 6 == 0 and months_since_start >= 0:
+                        should_collect = True
+                        timing = "📆 簽約時/中途"
+                elif row['payment_method'] == '年繳':
+                    start_date = datetime.strptime(row['lease_start'], "%Y.%m.%d")
+                    if start_date.strftime("%Y-%m") == current_month:
+                        should_collect = True
+                        timing = "📅 簽約時"
+                
+                # 檢查是否已收
+                already_paid = False
+                if not history.empty:
+                    month_records = history[
+                        (history['room_number'] == row['room_number']) & 
+                        (history['payment_schedule'].str.contains(current_month.split('-')[1], na=False))
+                    ]
+                    already_paid = len(month_records) > 0
+                
+                monthly_forecast.append({
+                    'room': row['room_number'],
+                    'name': row['tenant_name'],
+                    'method': row['payment_method'],
+                    'water': row['has_water_discount'],
+                    'amount': payment_amount,
+                    'should_collect': should_collect,
+                    'paid': already_paid,
+                    'timing': timing
+                })
+            
+            # 計算統計
+            should_collect_list = [f for f in monthly_forecast if f['should_collect']]
+            already_paid_list = [f for f in monthly_forecast if f['should_collect'] and f['paid']]
+            
+            total_expected = sum(f['amount'] for f in should_collect_list)
+            total_collected = sum(f['amount'] for f in already_paid_list)
+            total_unpaid = total_expected - total_collected
+            collection_rate = (total_collected / total_expected * 100) if total_expected > 0 else 0
+            
+            # 關鍵指標
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                display_card("本月應收", f"${total_expected:,.0f}", f"{len(should_collect_list)} 間", "blue")
+            
+            with col2:
+                display_card("本月已收", f"${total_collected:,.0f}", f"{len(already_paid_list)} 間", "green")
+            
+            with col3:
+                display_card("未繳金額", f"${total_unpaid:,.0f}", f"{len(should_collect_list) - len(already_paid_list)} 間", "red" if total_unpaid > 0 else "blue")
+            
+            with col4:
+                display_card("收繳率", f"{collection_rate:.1f}%", f"完成度", "orange")
+            
+            st.divider()
+            
+            # ===== 繳費狀態看板 =====
+            st.subheader("📋 本月繳費狀態看板")
+            
+            unpaid_list = [f for f in should_collect_list if not f['paid']]
+            paid_list = [f for f in should_collect_list if f['paid']]
+            no_collection = [f for f in monthly_forecast if not f['should_collect']]
+            
+            # 未繳
+            if unpaid_list:
+                st.warning(f"🔴 **待繳房間 ({len(unpaid_list)} 間)**")
+                cols = st.columns(3)
+                for idx, f in enumerate(unpaid_list):
+                    with cols[idx % 3]:
+                        water_badge = "💧" if f['water'] else ""
+                        with st.container():
+                            st.markdown(f"""
+                            <div style="background-color: #ffe6e6; border-left: 4px solid #ff4444; border-radius: 8px; padding: 12px; margin-bottom: 8px;">
+                                <div style="font-weight: bold; font-size: 1.1rem;">{f['room']} {f['name']}</div>
+                                <div style="font-size: 0.9rem; color: #666; margin: 4px 0;">{f['method']} {water_badge}</div>
+                                <div style="font-size: 1.2rem; font-weight: bold; color: #d32f2f; margin: 8px 0;">應繳: ${f['amount']:,.0f}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                st.divider()
+            
+            # 已繳
+            if paid_list:
+                st.success(f"🟢 **已繳房間 ({len(paid_list)} 間)**")
+                cols = st.columns(3)
+                for idx, f in enumerate(paid_list):
+                    with cols[idx % 3]:
+                        water_badge = "💧" if f['water'] else ""
+                        with st.container():
+                            st.markdown(f"""
+                            <div style="background-color: #e6ffe6; border-left: 4px solid #44ff44; border-radius: 8px; padding: 12px; margin-bottom: 8px;">
+                                <div style="font-weight: bold; font-size: 1.1rem;">{f['room']} {f['name']}</div>
+                                <div style="font-size: 0.9rem; color: #666; margin: 4px 0;">{f['method']} {water_badge}</div>
+                                <div style="font-size: 1.2rem; font-weight: bold; color: #2e7d32; margin: 8px 0;">✅ ${f['amount']:,.0f}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                st.divider()
+            
+            # 本月暫無應繳
+            if no_collection:
+                st.info(f"⚪ **本月暫無應繳 ({len(no_collection)} 間)** → {no_collection[0]['timing'] if no_collection else ''}")
+                cols = st.columns(3)
+                for idx, f in enumerate(no_collection):
+                    with cols[idx % 3]:
+                        water_badge = "💧" if f['water'] else ""
+                        with st.container():
+                            st.markdown(f"""
+                            <div style="background-color: #f5f5f5; border-left: 4px solid #999; border-radius: 8px; padding: 12px; margin-bottom: 8px;">
+                                <div style="font-weight: bold; font-size: 1.1rem;">{f['room']} {f['name']}</div>
+                                <div style="font-size: 0.9rem; color: #666; margin: 4px 0;">{f['method']} {water_badge}</div>
+                                <div style="font-size: 0.9rem; color: #999; margin-top: 8px;">下期: {f['timing']}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+            
+            st.divider()
+            
+            # ===== 快速記錄 =====
+            st.subheader("📝 快速記錄收租")
+            
+            with st.form("quick_payment_form"):
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    collectible_rooms = [f['room'] for f in should_collect_list if not f['paid']]
+                    if collectible_rooms:
+                        room = st.selectbox("房號", collectible_rooms, key="quick_room")
+                        selected_forecast = next(f for f in monthly_forecast if f['room'] == room)
+                    else:
+                        st.info("✅ 本月無待繳房間")
+                        room = None
+                        selected_forecast = None
+                
+                with col2:
+                    if selected_forecast:
+                        st.write(f"**應繳:** ${selected_forecast['amount']:,.0f}")
+                        st.write(f"**方式:** {selected_forecast['method']}")
+                
+                with col3:
+                    st.write("")
+                    if st.form_submit_button("🎯 快速記錄", type="primary", use_container_width=True):
+                        if selected_forecast:
+                            success, msg = db.record_payment(
+                                room,
+                                current_month,
+                                selected_forecast['amount'],
+                                datetime.now().strftime("%Y-%m-%d"),
+                                "已收",
+                                "快速記錄"
+                            )
+                            if success:
+                                st.success("✅ " + msg)
+                                st.rerun()
+            
+            st.divider()
+            
+            # ===== 詳細記錄 & 歷史 =====
+            tab1, tab2, tab3 = st.tabs(["📊 本月詳細", "📅 按方式分類", "📜 繳費歷史"])
+            
+            with tab1:
+                st.subheader("本月詳細繳費記錄")
+                detail_data = []
+                for f in monthly_forecast:
+                    if f['should_collect']:
+                        water_label = "✅ 有折" if f['water'] else "❌"
+                        status = "✅ 已收" if f['paid'] else "🔴 未繳"
+                        detail_data.append({
+                            '房號': f['room'],
+                            '租客': f['name'],
+                            '繳租方式': f['method'],
+                            '水費': water_label,
+                            '應繳金額': f"${f['amount']:,.0f}",
+                            '狀態': status
+                        })
+                
+                if detail_data:
+                    st.dataframe(pd.DataFrame(detail_data), width='stretch', hide_index=True)
+                else:
+                    st.info("本月無應繳記錄")
+            
+            with tab2:
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.subheader("📅 月繳")
+                    monthly = [f for f in monthly_forecast if f['method'] == '月繳']
+                    if monthly:
+                        for m in monthly:
+                            status = "✅" if m['paid'] else "🔴"
+                            st.write(f"{status} {m['room']} {m['name']}: ${m['amount']:,.0f}")
+                    else:
+                        st.info("無月繳房間")
+                
+                with c2:
+                    st.subheader("📆 半年繳")
+                    half = [f for f in monthly_forecast if f['method'] == '半年繳']
+                    if half:
+                        for h in half:
+                            st.write(f"• {h['room']} {h['name']}: ${h['amount']:,.0f}")
+                    else:
+                        st.info("無半年繳房間")
+                
+                with c3:
+                    st.subheader("📅 年繳")
+                    yearly = [f for f in monthly_forecast if f['method'] == '年繳']
+                    if yearly:
+                        for y in yearly:
+                            st.write(f"• {y['room']} {y['name']}: ${y['amount']:,.0f}")
+                    else:
+                        st.info("無年繳房間")
+            
+            with tab3:
+                st.subheader("📜 繳費歷史 (最近 30 筆)")
+                if not history.empty:
+                    h_display = history.head(30).copy()
+                    h_display['payment_amount'] = h_display['payment_amount'].apply(lambda x: f"${x:,.0f}")
+                    st.dataframe(h_display[['room_number', 'payment_schedule', 'payment_amount', 'payment_date', 'status']], 
+                                width='stretch', hide_index=True)
+                else:
+                    st.info("尚無繳費記錄")
 
     # --- 4. 支出記帳 ---
     elif menu == "💸 支出記帳":
@@ -794,12 +905,13 @@ def main():
         with col1:
             st.subheader("系統信息")
             st.info("""
-            **幸福之家管理系統 Pro v3.5**
+            **幸福之家管理系統 Pro v3.6**
             
             • 12房間管理模式
             • ✨ 支持月繳/半年繳/年繳
             • 💧 水費已包含在租金中
             • SQLite3 本地數據庫
+            • 🎯 智能繳費狀態看板
             
             **上次更新:** 2025-12-06
             """)
@@ -807,38 +919,12 @@ def main():
         with col2:
             st.subheader("功能特性")
             st.success("""
-            ✅ 繳租方式正確計算
+            ✅ 即時繳費統計
+            ✅ 繳費狀態看板
+            ✅ 快速記錄功能
             ✅ 年繳折扣自動計算
-            ✅ 水費折扣标記
-            ✅ 繳費記錄追蹤
-            ✅ Session State 管理
-            ✅ 異常處理完整
-            """)
-        
-        with st.expander("📅 繳租方式詳細說明"):
-            st.markdown("""
-            ### 月繳 (📅)
-            - **繳費頻率:** 每個月繳一次
-            - **金額:** 月租金 (例如 4,000/月)
-            - **年度總額:** 月租 × 12
-            - **管理:** 需要每月催繳
-            
-            ### 半年繳 (📅📅)
-            - **繳費頻率:** 2 次/年 (簽約時 + 中途時)
-            - **金額:** 月租 × 6 = 一期金額
-            - **年度總額:** 月租 × 12 (分 2 期)
-            - **管理:** 簽約時收第一期，6個月後收第二期
-            
-            ### 年繳 (📅📅📅)
-            - **繳費頻率:** 1 次 (簽約時)
-            - **金額:** 月租 × 12 = 全年金額
-            - **年度總額:** 月租 × 12 (一次繳清)
-            - **管理:** 簽約時收全年，到期後新約再收
-            
-            ### 年繳折扣如何計算
-            - **例:** 5000元年繳，折1個月
-            - **計算:** 5000 × 11 ÷ 12 = 4,583.33/月
-            - **年度總額:** 4,583.33 × 12 = 55,000 (少 5,000)
+            ✅ 水費折扣標記
+            ✅ 繳費歷史追蹤
             """)
 
 if __name__ == "__main__":
