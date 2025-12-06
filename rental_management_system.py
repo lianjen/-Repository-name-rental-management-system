@@ -342,17 +342,18 @@ def days_until(date_str):
         return 999
 
 # ============================================================================
-# 4. 主程式
+# 4. 主程式 (修復編輯功能)
 # ============================================================================
 
 def main():
     db = RentalDB()
     
-    # 初始化 Session State
+    # === 修復重點 1：初始化 Session State ===
     if 'edit_mode' not in st.session_state:
-        st.session_state['edit_mode'] = False
-    if 'current_tenant' not in st.session_state:
-        st.session_state['current_tenant'] = None
+        st.session_state.edit_mode = False
+    
+    if 'edit_tenant_id' not in st.session_state:
+        st.session_state.edit_tenant_id = None
 
     with st.sidebar:
         st.title("🏠 幸福之家")
@@ -427,20 +428,20 @@ def main():
             st.subheader("⚡ 待辦事項")
             st.info("系統將自動在此列出即將到期或欠費的租客。")
 
-    # --- 2. 房客管理 (新增年繳折扣) ---
+    # --- 2. 房客管理 (修復編輯功能) ---
     elif menu == "👥 房客管理":
         col1, col2 = st.columns([4, 1])
         with col1:
             st.header("房客資料庫")
         with col2:
             if st.button("➕ 新增房客", type="primary", use_container_width=True):
-                st.session_state['edit_mode'] = False
-                st.session_state['current_tenant'] = None
+                st.session_state.edit_mode = False
+                st.session_state.edit_tenant_id = None
                 st.rerun()
 
         tenants = db.get_tenants()
         
-        # 顯示列表 (包含折扣資訊)
+        # === 修復重點 2：顯示租客列表 ===
         if not tenants.empty:
             for idx, (_, row) in enumerate(tenants.iterrows()):
                 # 計算實際月均租金
@@ -469,122 +470,197 @@ def main():
                         c2.write(f"**繳租方式:** {row['payment_method']}")
                     
                     b1, b2 = c3.columns(2)
-                    if b1.button("✏️ 編輯", key=f"edit_{row['id']}_{idx}"):
-                        st.session_state['edit_mode'] = True
-                        st.session_state['current_tenant'] = row.to_dict()
+                    
+                    # === 修復重點 3：編輯按鈕新增 on_click callback ===
+                    if b1.button("✏️ 編輯", key=f"edit_btn_{row['id']}"):
+                        st.session_state.edit_mode = True
+                        st.session_state.edit_tenant_id = row['id']
                         st.rerun()
                     
-                    if b2.button("🗑️ 刪除", key=f"del_{row['id']}_{idx}"):
+                    if b2.button("🗑️ 刪除", key=f"del_btn_{row['id']}"):
                         db.delete_tenant(row['id'])
                         st.success("已刪除")
                         st.rerun()
         else:
             st.info("尚無租客，請點擊右上方新增。")
 
-        # 表單區域
+        # === 修復重點 4：表單根據狀態顯示 ===
         st.divider()
-        is_edit = st.session_state.get('edit_mode', False)
-        curr = st.session_state.get('current_tenant')
-        if curr is None:
-            curr = {}
-
-        st.subheader("✏️ 編輯房客" if is_edit else "➕ 新增房客")
         
-        # 幫助文本
-        with st.expander("📖 如何填寫年繳折扣？"):
-            st.markdown("""
-            **年繳折扣說明：**
-            - 例如：月租 5,000 元，年繳折 1 個月
-            - 標準月租欄位：填入 **5000**
-            - 年繳折扣個月數：填入 **1**
-            - 系統會自動計算：5000 × 11 ÷ 12 = 4,583 元/月
-            - 年繳總額：4,583 × 12 = 55,000 元
-            
-            **常見案例：**
-            - 房 3D (陳俞任)：月租 5000 → 折 1 個月 → 實付 4,583/月
-            - 房 4A (王世嘉)：月租 5000 → 折 1 個月 → 實付 4,583/月
-            """)
-        
-        with st.form("tenant_form", clear_on_submit=False):
-            c1, c2 = st.columns(2)
-            
-            with c1:
-                # 房號選擇
-                r_idx = 0
-                if is_edit and curr.get('room_number') in ALL_ROOMS:
-                    r_idx = ALL_ROOMS.index(curr.get('room_number'))
-                
-                room = st.selectbox("房號", ALL_ROOMS, index=r_idx, key="form_room")
-                name = st.text_input("姓名", value=curr.get('tenant_name', ''), key="form_name")
-                phone = st.text_input("電話", value=curr.get('phone', ''), key="form_phone")
-                deposit = st.number_input("押金", value=float(curr.get('deposit', 10000)), key="form_deposit")
-            
-            with c2:
-                rent = st.number_input("標準月租金", value=float(curr.get('monthly_rent', 6000)), key="form_rent")
-                
-                # 處理日期預設值
-                default_start = date.today()
-                if is_edit and curr.get('lease_start'):
-                    try:
-                        default_start = datetime.strptime(curr['lease_start'], "%Y.%m.%d").date()
-                    except:
-                        pass
-                
-                default_end = date.today() + timedelta(days=365)
-                if is_edit and curr.get('lease_end'):
-                    try:
-                        default_end = datetime.strptime(curr['lease_end'], "%Y.%m.%d").date()
-                    except:
-                        pass
-
-                start = st.date_input("起租日", value=default_start, key="form_start")
-                end = st.date_input("到期日", value=default_end, key="form_end")
-                
-                pay_method_idx = 0
-                if curr.get('payment_method') in ["月繳", "半年繳", "年繳"]:
-                    pay_method_idx = ["月繳", "半年繳", "年繳"].index(curr['payment_method'])
-                
-                pay_method = st.selectbox("繳費方式", ["月繳", "半年繳", "年繳"], 
-                                        index=pay_method_idx, key="form_paymethod")
-
-            # 年繳折扣欄位 (新增！)
-            col_discount = st.columns([1, 3])
-            with col_discount[0]:
-                discount_months = st.number_input(
-                    "年繳折幾個月", 
-                    value=int(curr.get('annual_discount_months', 0)), 
-                    min_value=0, 
-                    max_value=12,
-                    key="form_discount"
+        if st.session_state.edit_mode:
+            # 編輯模式
+            if st.session_state.edit_tenant_id:
+                # 從 DB 重新獲取最新資料
+                conn = db.get_connection()
+                curr_df = pd.read_sql(
+                    "SELECT * FROM tenants WHERE id=?",
+                    conn, 
+                    params=(st.session_state.edit_tenant_id,)
                 )
-            with col_discount[1]:
-                if discount_months > 0:
-                    effective = (rent * (12 - discount_months)) / 12
-                    st.info(f"💡 實付月均：${effective:,.0f}/月，年繳總額：${effective * 12:,.0f}")
+                conn.close()
+                
+                if curr_df.empty:
+                    st.error("❌ 找不到該租客資料")
                 else:
-                    st.caption("不折扣時，直接按標準月租計算")
+                    curr = curr_df.iloc[0].to_dict()
+                    st.subheader(f"✏️ 編輯房客 - {curr['room_number']} {curr['tenant_name']}")
+                    
+                    # 幫助文本
+                    with st.expander("📖 如何填寫年繳折扣？"):
+                        st.markdown("""
+                        **年繳折扣說明：**
+                        - 例如：月租 5,000 元，年繳折 1 個月
+                        - 標準月租欄位：填入 **5000**
+                        - 年繳折扣個月數：填入 **1**
+                        - 系統會自動計算：5000 × 11 ÷ 12 = 4,583 元/月
+                        - 年繳總額：4,583 × 12 = 55,000 元
+                        """)
+                    
+                    with st.form("edit_tenant_form"):
+                        c1, c2 = st.columns(2)
+                        
+                        with c1:
+                            # 房號不可編輯
+                            st.text_input("房號 (不可修改)", value=curr['room_number'], disabled=True, key="edit_room_readonly")
+                            name = st.text_input("姓名", value=curr['tenant_name'], key="edit_name")
+                            phone = st.text_input("電話", value=str(curr['phone']) if curr['phone'] else "", key="edit_phone")
+                            deposit = st.number_input("押金", value=float(curr['deposit']), key="edit_deposit")
+                        
+                        with c2:
+                            rent = st.number_input("標準月租金", value=float(curr['monthly_rent']), key="edit_rent")
+                            
+                            # 日期處理
+                            default_start = date.today()
+                            try:
+                                default_start = datetime.strptime(curr['lease_start'], "%Y.%m.%d").date()
+                            except:
+                                pass
+                            
+                            default_end = date.today() + timedelta(days=365)
+                            try:
+                                default_end = datetime.strptime(curr['lease_end'], "%Y.%m.%d").date()
+                            except:
+                                pass
 
-            notes = st.text_area("備註", value=curr.get('notes', ''), key="form_notes")
+                            start = st.date_input("起租日", value=default_start, key="edit_start")
+                            end = st.date_input("到期日", value=default_end, key="edit_end")
+                            
+                            pay_method_idx = 0
+                            if curr['payment_method'] in ["月繳", "半年繳", "年繳"]:
+                                pay_method_idx = ["月繳", "半年繳", "年繳"].index(curr['payment_method'])
+                            
+                            pay_method = st.selectbox("繳費方式", ["月繳", "半年繳", "年繳"], 
+                                                    index=pay_method_idx, key="edit_paymethod")
+
+                        # 年繳折扣欄位
+                        col_discount = st.columns([1, 3])
+                        with col_discount[0]:
+                            discount_months = st.number_input(
+                                "年繳折幾個月", 
+                                value=int(curr['annual_discount_months']) if curr['annual_discount_months'] else 0, 
+                                min_value=0, 
+                                max_value=12,
+                                key="edit_discount"
+                            )
+                        with col_discount[1]:
+                            if discount_months > 0:
+                                effective = (rent * (12 - discount_months)) / 12
+                                st.info(f"💡 實付月均：${effective:,.0f}/月，年繳總額：${effective * 12:,.0f}")
+                            else:
+                                st.caption("不折扣時，直接按標準月租計算")
+
+                        notes = st.text_area("備註", value=str(curr['notes']) if curr['notes'] else "", key="edit_notes")
+                        
+                        col_btn1, col_btn2 = st.columns(2)
+                        with col_btn1:
+                            submitted = st.form_submit_button("💾 保存修改", type="primary")
+                        with col_btn2:
+                            cancel = st.form_submit_button("❌ 取消編輯")
+                        
+                        if submitted:
+                            if not name:
+                                st.error("請填寫姓名")
+                            else:
+                                success, msg = db.upsert_tenant(
+                                    curr['room_number'], name, phone, deposit, rent, 
+                                    start.strftime("%Y.%m.%d"), end.strftime("%Y.%m.%d"), 
+                                    pay_method, discount_months, 0, notes, 
+                                    st.session_state.edit_tenant_id
+                                )
+                                if success:
+                                    st.success("✅ " + msg)
+                                    st.session_state.edit_mode = False
+                                    st.session_state.edit_tenant_id = None
+                                    st.rerun()
+                                else:
+                                    st.error("❌ " + msg)
+                        
+                        if cancel:
+                            st.session_state.edit_mode = False
+                            st.session_state.edit_tenant_id = None
+                            st.rerun()
+        else:
+            # 新增模式
+            st.subheader("➕ 新增房客")
             
-            submitted = st.form_submit_button("💾 保存資料", type="primary")
+            with st.expander("📖 如何填寫年繳折扣？"):
+                st.markdown("""
+                **年繳折扣說明：**
+                - 例如：月租 5,000 元，年繳折 1 個月
+                - 標準月租欄位：填入 **5000**
+                - 年繳折扣個月數：填入 **1**
+                - 系統會自動計算：5000 × 11 ÷ 12 = 4,583 元/月
+                - 年繳總額：4,583 × 12 = 55,000 元
+                """)
             
-            if submitted:
-                if not name:
-                    st.error("請填寫姓名")
-                else:
-                    success, msg = db.upsert_tenant(
-                        room, name, phone, deposit, rent, 
-                        start.strftime("%Y.%m.%d"), end.strftime("%Y.%m.%d"), 
-                        pay_method, discount_months, 0, notes, 
-                        curr.get('id') if is_edit else None
+            with st.form("add_tenant_form"):
+                c1, c2 = st.columns(2)
+                
+                with c1:
+                    room = st.selectbox("房號", ALL_ROOMS, key="add_room")
+                    name = st.text_input("姓名", key="add_name")
+                    phone = st.text_input("電話", key="add_phone")
+                    deposit = st.number_input("押金", value=10000, key="add_deposit")
+                
+                with c2:
+                    rent = st.number_input("標準月租金", value=6000, key="add_rent")
+                    start = st.date_input("起租日", key="add_start")
+                    end = st.date_input("到期日", value=date.today() + timedelta(days=365), key="add_end")
+                    pay_method = st.selectbox("繳費方式", ["月繳", "半年繳", "年繳"], key="add_paymethod")
+
+                # 年繳折扣欄位
+                col_discount = st.columns([1, 3])
+                with col_discount[0]:
+                    discount_months = st.number_input(
+                        "年繳折幾個月", 
+                        value=0, 
+                        min_value=0, 
+                        max_value=12,
+                        key="add_discount"
                     )
-                    if success:
-                        st.success(msg)
-                        st.session_state['edit_mode'] = False
-                        st.session_state['current_tenant'] = None
-                        st.rerun()
+                with col_discount[1]:
+                    if discount_months > 0:
+                        effective = (rent * (12 - discount_months)) / 12
+                        st.info(f"💡 實付月均：${effective:,.0f}/月，年繳總額：${effective * 12:,.0f}")
                     else:
-                        st.error(msg)
+                        st.caption("不折扣時，直接按標準月租計算")
+
+                notes = st.text_area("備註", key="add_notes")
+                
+                if st.form_submit_button("✅ 新增租客", type="primary"):
+                    if not name:
+                        st.error("請填寫姓名")
+                    else:
+                        success, msg = db.upsert_tenant(
+                            room, name, phone, deposit, rent, 
+                            start.strftime("%Y.%m.%d"), end.strftime("%Y.%m.%d"), 
+                            pay_method, discount_months, 0, notes
+                        )
+                        if success:
+                            st.success("✅ " + msg)
+                            st.rerun()
+                        else:
+                            st.error("❌ " + msg)
 
     # --- 3. 租金收繳 ---
     elif menu == "💰 租金收繳":
@@ -687,7 +763,7 @@ def main():
         with col1:
             st.subheader("系統信息")
             st.info("""
-            **幸福之家管理系統 Pro v3.1**
+            **幸福之家管理系統 Pro v3.2**
             
             • 12房間管理模式
             • ✨ 支持年繳折扣計算
@@ -703,7 +779,7 @@ def main():
             ✅ 完整的資料庫遷移機制
             ✅ Null 值防護
             ✅ 年繳折扣自動計算
-            ✅ Session State 狀態管理
+            ✅ Session State 狀態管理 (已修復)
             ✅ 異常處理完整
             """)
         
