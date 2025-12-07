@@ -4,3 +4,4 @@ numpy
 openpyxl
 python-dateutil
 pytz
+pip install streamlit
