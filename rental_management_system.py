@@ -1,16 +1,12 @@
 """
-幸福之家管理系統 Pro v13.9 Plus UI 美化版
-= 核心優化 =
-✅ 1. 全局美化：溫暖的米白色 + 橘棕色主題
-✅ 2. CSS 樣式升級：柔和陰影、圓角、字體優化
-✅ 3. 側邊欄美化：清爽的導航體驗
-✅ 4. 卡片式佈局：白色卡片 + 米色邊框
-✅ 5. 按鈕優化：溫暖的橘棕色 + 懸停動畫
-✅ 6. 表格視覺化：column_config 貨幣格式
-✅ 7. Metric 卡片：溫暖的橘棕色數值
-✅ 8. 進度條和 Toast 提示：現代化回饋
+幸福之家管理系統 Pro v13.10 - 莫蘭迪柔和護眼版
+= 視覺優化 =
+✅ 1. 全局背景：極淡冷灰白 (#f8f9fa)，模擬紙張質感，降低視覺疲勞。
+✅ 2. 主色調：鼠尾草綠 (#84a98c) + 霧霾藍 (#5c677d)，低飽和度更耐看。
+✅ 3. 卡片設計：去除多餘邊框，使用柔和懸浮陰影。
+✅ 4. 文字優化：深灰藍色 (#2f3e46) 取代純黑，閱讀更舒適。
 
-所有功能邏輯和架構保持不變，僅優化 UI/UX
+功能邏輯保持 v13.9/v13.8 完整架構不變。
 """
 
 import streamlit as st
@@ -185,7 +181,7 @@ def generate_payment_schedule(payment_method: str, start_date: str, end_date: st
     return schedule
 
 # ============================================================================
-# 數據庫類 (v13.9 Final Plus)
+# 數據庫類 (保持不變)
 # ============================================================================
 class RentalDB:
     def __init__(self, db_path: str = "rental_system_12rooms.db"):
@@ -267,7 +263,6 @@ class RentalDB:
                 UNIQUE(room_number, payment_year, payment_month)
             )""")
             
-            # v13.9 Final Plus 新增：租金預填表
             cursor.execute("""CREATE TABLE IF NOT EXISTS rent_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 room_number TEXT NOT NULL,
@@ -516,11 +511,11 @@ class RentalDB:
                 ORDER BY due_date ASC
             """, conn)
 
-    # ===== 租金管理 v13.9 Final Plus (新增批量預填) =====
+    # ===== 租金管理 =====
     def batch_record_rent(self, room: str, tenant_name: str, start_year: int, start_month: int, 
                          months_count: int, base_rent: float, water_fee: float, discount: float, 
                          payment_method: str = "月繳", notes: str = ""):
-        """批量預填租金 - 一次填多個月"""
+        """批量預填租金"""
         try:
             with self._get_connection() as conn:
                 actual_amount = base_rent + water_fee - discount
@@ -528,11 +523,9 @@ class RentalDB:
                 current_date = date(start_year, start_month, 1)
                 
                 for i in range(months_count):
-                    # 計算年月
                     year = current_date.year
                     month = current_date.month
                     
-                    # 儲存租金記錄 (狀態為"待確認")
                     conn.execute("""INSERT OR REPLACE INTO rent_records
                         (room_number, tenant_name, year, month, base_amount, water_fee, discount_amount, 
                          actual_amount, paid_amount, payment_method, notes, status, recorded_by, updated_at)
@@ -541,7 +534,6 @@ class RentalDB:
                          actual_amount, 0, payment_method, notes, "待確認", "batch", 
                          datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
                     
-                    # 移動到下一個月
                     if month == 12:
                         current_date = date(year + 1, 1, 1)
                     else:
@@ -554,10 +546,9 @@ class RentalDB:
             return False, f"❌ 失敗: {str(e)}"
 
     def confirm_rent_payment(self, rent_id: int, paid_date: str, paid_amount: float = None):
-        """確認已繳費 - 從待確認改為已收"""
+        """確認已繳費"""
         try:
             with self._get_connection() as conn:
-                # 取得原記錄
                 row = conn.execute("SELECT actual_amount FROM rent_records WHERE id=?", (rent_id,)).fetchone()
                 if not row:
                     return False, "❌ 找不到該筆記錄"
@@ -709,58 +700,65 @@ class RentalDB:
         return True
 
 # ============================================================================
-# UI 工具 (優化版)
+# UI 工具 (柔和護眼版)
 # ============================================================================
 def display_card(title: str, value: str, color: str = "blue"):
-    """溫暖風格卡片 - 使用橘棕色主題"""
+    """
+    莫蘭迪風格卡片
+    使用低飽和度色彩，減少視覺疲勞
+    """
+    # 背景色：極淡的粉筆色
     colors = {
-        "blue": "#e3f2fd",      # 淺藍
-        "green": "#e8f5e9",     # 淺綠
-        "orange": "#ffe8d6",    # 淺橘
-        "red": "#ffebee"        # 淺紅
+        "blue": "#f0f4f8",      # 淡灰藍
+        "green": "#edf2f0",     # 淡灰綠
+        "orange": "#fdf3e7",    # 淡米橘
+        "red": "#fbeaea"        # 淡灰紅
     }
-    text_colors = {
-        "blue": "#1976d2",
-        "green": "#388e3c",
-        "orange": "#bc6c25",    # 溫暖的橘棕色
-        "red": "#d32f2f"
+    # 邊框色：柔和的莫蘭迪色
+    border_colors = {
+        "blue": "#98c1d9",      # 莫蘭迪藍
+        "green": "#99b898",     # 莫蘭迪綠
+        "orange": "#e0c3a5",    # 莫蘭迪棕
+        "red": "#e5989b"        # 莫蘭迪紅
     }
+    # 文字色：深灰藍，不使用純黑
+    text_color = "#4a5568"
+    value_color = "#2d3748"
     
     st.markdown(f"""
-    <div style="background: {colors.get(color, '#f8f9fa')}; border-radius: 12px; padding: 15px; margin-bottom: 10px; border-left: 5px solid {text_colors.get(color, '#868e96')}; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-        <div style="color: {text_colors.get(color, '#868e96')}; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">{title}</div>
-        <div style="color: #283618; font-size: 1.8rem; font-weight: 800; margin-top: 5px;">{value}</div>
+    <div style="background: {colors.get(color, '#f8f9fa')}; border-radius: 10px; padding: 16px; margin-bottom: 12px; border: 1px solid {border_colors.get(color, '#d1d5db')}; border-left: 5px solid {border_colors.get(color, '#d1d5db')}; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+        <div style="color: {text_color}; font-size: 0.9rem; font-weight: 600; letter-spacing: 0.5px;">{title}</div>
+        <div style="color: {value_color}; font-size: 1.6rem; font-weight: 700; margin-top: 6px; font-family: 'Segoe UI', sans-serif;">{value}</div>
     </div>
     """, unsafe_allow_html=True)
 
 def display_room_card(room, status_color, status_text, detail_text=""):
-    """房間卡片 - 溫暖風格"""
+    """
+    房間卡片 - 護眼風格
+    去除粗邊框，使用柔和背景
+    """
     bg_color = {
-        "green": "#e8f5e9",
-        "red": "#ffebee",
-        "orange": "#ffe8d6"
-    }.get(status_color, "#f1f3f5")
-    border_color = {
-        "green": "#4caf50",
-        "red": "#f44336",
-        "orange": "#dda15e"
-    }.get(status_color, "#dee2e6")
+        "green": "#eaf4e7", # 護眼綠背景
+        "red": "#fae3e3",   # 柔和紅背景
+        "orange": "#fef5e6" # 暖米色背景
+    }.get(status_color, "#f8f9fa")
+    
     text_color = {
-        "green": "#2e7d32",
-        "red": "#c62828",
-        "orange": "#bc6c25"
-    }.get(status_color, "#495057")
+        "green": "#2f5d34", # 深苔綠文字
+        "red": "#8a2c2c",   # 深磚紅文字
+        "orange": "#8a5a2c" # 深褐色文字
+    }.get(status_color, "#4a5568")
     
     st.markdown(f"""
-    <div style="background-color: {bg_color}; border: 2px solid {border_color}; border-radius: 10px; padding: 10px; text-align: center; height: 100px; display: flex; flex-direction: column; justify-content: center; align-items: center; margin-bottom: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.05);">
-        <div style="font-size: 1.4rem; font-weight: 800; color: {text_color};">{room}</div>
-        <div style="font-size: 0.9rem; font-weight: 600; color: {text_color}; margin-top: 2px;">{status_text}</div>
+    <div style="background-color: {bg_color}; border-radius: 12px; padding: 12px; text-align: center; height: 100px; display: flex; flex-direction: column; justify-content: center; align-items: center; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: transform 0.2s;">
+        <div style="font-size: 1.3rem; font-weight: 700; color: {text_color};">{room}</div>
+        <div style="font-size: 0.9rem; font-weight: 600; color: {text_color}; margin-top: 4px;">{status_text}</div>
         <div style="font-size: 0.75rem; color: {text_color}; opacity: 0.8;">{detail_text}</div>
     </div>
     """, unsafe_allow_html=True)
 
 # ============================================================================
-# 頁面層 - 儀表板 (保持不變)
+# 頁面層 - 儀表板
 # ============================================================================
 def page_dashboard(db: RentalDB):
     st.header("📊 儀表板")
@@ -768,7 +766,7 @@ def page_dashboard(db: RentalDB):
     tenants = db.get_tenants()
     today = date.today()
     
-    st.markdown("### 🏢 物業概況")
+    st.markdown("##### 🏢 物業概況")
     col1, col2, col3, col4 = st.columns(4)
     
     occupancy = len(tenants)
@@ -785,7 +783,7 @@ def page_dashboard(db: RentalDB):
     
     st.divider()
     
-    st.markdown("### 💳 繳費狀態 (點擊【智慧繳費】查詳情)")
+    st.markdown("##### 💳 繳費狀態")
     
     col1, col2, col3 = st.columns(3)
     
@@ -795,18 +793,18 @@ def page_dashboard(db: RentalDB):
     
     with col1:
         if len(overdue) > 0:
-            display_card("🚨 逾期未繳", f"{len(overdue)} 筆", "red")
+            display_card("逾期未繳", f"{len(overdue)} 筆", "red")
         else:
-            display_card("✅ 無逾期", "0 筆", "green")
+            display_card("逾期未繳", "0 筆", "green")
     
     with col2:
         if len(upcoming) > 0:
-            display_card("⏰ 7天內繳費", f"{len(upcoming)} 筆", "orange")
+            display_card("7天內到期", f"{len(upcoming)} 筆", "orange")
         else:
-            display_card("✅ 無待繳", "0 筆", "green")
+            display_card("7天內到期", "0 筆", "green")
     
     with col3:
-        display_card("📈 收款率", f"{summary['collection_rate']:.1f}%", "blue")
+        display_card("本年度收款率", f"{summary['collection_rate']:.1f}%", "blue")
     
     st.divider()
     
@@ -822,14 +820,14 @@ def page_dashboard(db: RentalDB):
                 pass
     
     if expiring_soon:
-        st.markdown("### 🚨 **即將到期合約 (45天內)**")
+        st.markdown("##### 🚨 即將到期合約 (45天內)")
         cols = st.columns(4)
         for i, (room, name, days, end_date) in enumerate(expiring_soon):
             with cols[i % 4]:
                 st.error(f"**{room} {name}**\n\n剩餘 **{days}** 天\n\n({end_date})")
         st.divider()
     
-    st.markdown("### 🏠 **房間實時狀態**")
+    st.markdown("##### 🏠 房間實時狀態")
     active_rooms = tenants.set_index('room_number') if not tenants.empty else pd.DataFrame()
     cols = st.columns(6)
     
@@ -857,7 +855,7 @@ def page_dashboard(db: RentalDB):
 
     st.divider()
     
-    st.markdown("### 📅 **年度房租繳費總覽**")
+    st.markdown("##### 📅 年度房租繳費總覽")
     year = st.selectbox("選擇年份", [today.year, today.year + 1], key="dash_year")
     rent_matrix = db.get_rent_matrix(year)
     if not rent_matrix.empty:
@@ -870,7 +868,7 @@ def page_dashboard(db: RentalDB):
     col_memo, col_unpaid = st.columns([1, 1])
     
     with col_memo:
-        st.subheader("📝 待辦事項")
+        st.markdown("##### 📝 待辦事項")
         memos = db.get_memos(completed=False)
         if not memos.empty:
             for _, memo in memos.iterrows():
@@ -883,7 +881,7 @@ def page_dashboard(db: RentalDB):
             st.caption("✅ 無待辦事項")
 
     with col_unpaid:
-        st.subheader("💰 未繳房租")
+        st.markdown("##### 💰 舊版未繳記錄")
         unpaid = db.get_unpaid_rents()
         if not unpaid.empty:
             st.dataframe(unpaid[['房號','房客','金額']], use_container_width=True, hide_index=True)
@@ -891,7 +889,7 @@ def page_dashboard(db: RentalDB):
             st.caption("✅ 全數繳清")
 
 # ============================================================================
-# 頁面層 - 收租金 v13.9 Final Plus (新增批量預填)
+# 頁面層 - 收租金
 # ============================================================================
 def page_collect_rent(db: RentalDB):
     st.header("💳 收租金管理")
@@ -932,7 +930,7 @@ def page_collect_rent(db: RentalDB):
                 new_discount = st.number_input("折扣", value=0.0, step=100.0)
             
             final_amount = new_base + new_water - new_discount
-            st.markdown(f"<div style='text-align:right; font-size:1.5em; font-weight:bold; color:#bc6c25;'>本期應收：<span style=\"font-size:1.8em;\">${final_amount:,.0f}</span></div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='text-align:right; font-size:1.5em; font-weight:bold; color:#5c677d;'>本期應收：<span style=\"font-size:1.8em; color:#2f3e46;\">${final_amount:,.0f}</span></div>", unsafe_allow_html=True)
             
             with st.expander("💵 填寫收款詳情 (若已收款)", expanded=True):
                 c1, c2 = st.columns(2)
@@ -989,7 +987,7 @@ def page_collect_rent(db: RentalDB):
                     batch_discount = st.number_input("月折扣", value=0.0, step=100.0, key="batch_discount")
                 
                 batch_actual = batch_base + batch_water - batch_discount
-                st.markdown(f"<div style='text-align:right; font-size:1.2em; font-weight:bold; color:#bc6c25;'>每月應收：<span style=\"font-size:1.5em;\">${batch_actual:,.0f}</span></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='text-align:right; font-size:1.2em; font-weight:bold; color:#5c677d;'>每月應收：<span style=\"font-size:1.5em; color:#2f3e46;\">${batch_actual:,.0f}</span></div>", unsafe_allow_html=True)
                 
                 st.divider()
                 st.markdown("### 📅 預填月份設定")
@@ -998,7 +996,6 @@ def page_collect_rent(db: RentalDB):
                 with col_m1:
                     months_count = st.slider("要預填幾個月？", min_value=1, max_value=12, value=12)
                 with col_m2:
-                    # 計算結束月份
                     end_month = start_month + months_count - 1
                     end_year = start_year
                     if end_month > 12:
@@ -1044,7 +1041,6 @@ def page_collect_rent(db: RentalDB):
         if pending.empty:
             st.success("✅ 沒有待確認項目")
         else:
-            # 按狀態分組
             col_pending, col_confirmed = st.columns(2)
             
             with col_pending:
@@ -1098,7 +1094,7 @@ def page_collect_rent(db: RentalDB):
             st.info("尚無紀錄")
 
 # ============================================================================
-# 頁面層 - 智慧繳費追蹤 (優化表格)
+# 頁面層 - 智慧繳費追蹤
 # ============================================================================
 def page_payment_tracker(db: RentalDB):
     st.header("💳 智慧繳費追蹤")
@@ -1192,7 +1188,7 @@ def page_payment_tracker(db: RentalDB):
         tenants = db.get_tenants()
         if not tenants.empty:
             payment_dist = tenants['payment_method'].value_counts()
-            st.subheader("繳費方式分佈")
+            st.markdown("##### 繳費方式分佈")
             col1, col2 = st.columns([1, 2])
             with col1:
                 st.write(payment_dist)
@@ -1210,7 +1206,7 @@ def page_payment_tracker(db: RentalDB):
             st.dataframe(overdue, use_container_width=True, hide_index=True)
 
 # ============================================================================
-# 頁面層 - 房客管理 (保持不變)
+# 頁面層 - 房客管理
 # ============================================================================
 def page_tenants(db: RentalDB):
     st.header("👥 房客管理")
@@ -1493,111 +1489,128 @@ def page_settings(db: RentalDB):
                 st.rerun()
 
 # ============================================================================
-# 主程式 - UI/UX 美化版
+# 主程式 - UI/UX 莫蘭迪柔和版
 # ============================================================================
 def main():
     st.set_page_config(
-        page_title="幸福之家 v13.9 Plus",
+        page_title="幸福之家 v13.10 Soft",
         page_icon="🏠",
         layout="wide",
         initial_sidebar_state="expanded"
     )
     
-    # ✨ UI 美化：溫暖風格主題
+    # ✨ UI 美化：莫蘭迪柔和護眼主題
     st.markdown("""
     <style>
-        /* 溫暖風格全局設置：使用米白色背景與柔和字體 */
+        /* 1. 護眼背景與字體 */
         .stApp {
-            background-color: #fefae0; /* 溫暖的奶油黃/米白色主背景 */
+            background-color: #f8f9fa; /* 極淡的冷灰白，接近紙張顏色 */
             font-family: '微軟正黑體', 'Microsoft JhengHei', sans-serif;
-            color: #283618; /* 柔和的深色（深橄欖綠）文字 */
+            color: #2f3e46; /* 深灰藍，不使用純黑，減少對比刺激 */
         }
         
-        /* 標題與文字：使用溫暖的橘棕色 */
+        /* 2. 標題與文字：使用莫蘭迪綠與深灰藍 */
         h1, h2, h3 {
-            color: #bc6c25; /* 溫暖的橘棕色標題 */
+            color: #52796f; /* 深鼠尾草綠 */
             font-weight: 700;
         }
+        h4, h5, h6 {
+            color: #5c677d; /* 霧霾藍 */
+            font-weight: 600;
+        }
         
-        /* 側邊欄優化 */
+        /* 3. 側邊欄：純淨白 */
         section[data-testid="stSidebar"] {
-            background-color: #f7f7f7; /* 淺米白色側邊欄 */
-            box-shadow: 2px 0 5px rgba(0,0,0,0.03);
+            background-color: #ffffff;
+            box-shadow: 2px 0 8px rgba(0,0,0,0.03); /* 極淡陰影 */
         }
 
-        /* 卡片式佈局優化 */
+        /* 4. 卡片式佈局優化：柔和圓角與懸浮感 */
         div[data-testid="stVerticalBlock"] > div[style*="padding"], 
         [data-testid="stExpander"] {
-            background-color: #ffffff; /* 卡片內部維持白色 */
+            background-color: #ffffff;
             border-radius: 12px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05); /* 柔和的陰影 */
-            padding: 15px;
-            border: 1px solid #faedcd !important; /* 輕微的米色邊框 */
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03); /* 擴散柔和陰影 */
+            padding: 16px;
+            border: 1px solid #e9ecef !important; /* 極淡邊框 */
         }
         
-        /* 主要按鈕 (Primary Button)：使用溫暖的橘棕色 */
+        /* 5. 主要按鈕：鼠尾草綠 */
         .stButton>button[kind="primary"] {
-            background-color: #bc6c25 !important; /* 溫暖的橘棕色 */
+            background-color: #84a98c !important; /* 鼠尾草綠 */
             color: white !important;
             border: none !important;
             border-radius: 8px !important;
             font-weight: 600 !important;
             transition: all 0.3s ease !important;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+            box-shadow: 0 2px 5px rgba(132, 169, 140, 0.3) !important;
         }
         .stButton>button[kind="primary"]:hover {
-            background-color: #dda15e !important; /* 懸停時變淺，更柔和 */
+            background-color: #52796f !important; /* 深綠 */
             transform: translateY(-2px) !important;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.15) !important;
+            box-shadow: 0 4px 10px rgba(132, 169, 140, 0.4) !important;
         }
 
-        /* 次要按鈕 */
+        /* 6. 次要按鈕 */
         .stButton>button {
             border-radius: 8px !important;
-            transition: all 0.3s ease !important;
+            background-color: #ffffff;
+            border: 1px solid #cbd5e0;
+            color: #4a5568;
             font-weight: 600 !important;
+            transition: all 0.3s ease !important;
         }
         .stButton>button:hover {
+            border-color: #84a98c;
+            color: #2f3e46;
             transform: translateY(-2px) !important;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1) !important;
         }
         
-        /* Metric (數值卡片) 優化，讓數值更溫暖突出 */
+        /* 7. 數值強調色：暖褐色 */
         [data-testid="stMetricValue"] { 
-            color: #bc6c25 !important; 
+            color: #6b705c !important; /* 橄欖褐 */
             font-size: 1.8rem !important;
         }
         
-        /* 分隔線優化 */
+        /* 8. 分隔線 */
         .stDivider {
-            border-top: 1px solid #faedcd !important;
+            border-top: 1px solid #e9ecef !important;
         }
 
-        /* 表單輸入優化 */
+        /* 9. 輸入框優化 */
         .stTextInput>div>div>input,
         .stNumberInput>div>div>input,
         .stSelectbox>div>div>select,
         .stDateInput>div>div>input {
             border-radius: 8px !important;
-            border: 1px solid #ddd !important;
+            border: 1px solid #ced4da !important;
             padding: 8px 12px !important;
+            background-color: #fcfcfc;
+        }
+        .stTextInput>div>div>input:focus,
+        .stNumberInput>div>div>input:focus {
+            border-color: #84a98c !important;
+            box-shadow: 0 0 0 2px rgba(132, 169, 140, 0.2) !important;
         }
 
-        /* Expandable 優化 */
+        /* 10. Expander 標題 */
         .streamlit-expanderHeader {
             background-color: #ffffff !important;
             border-radius: 8px !important;
-            border: 1px solid #faedcd !important;
+            border: none !important;
+            color: #52796f !important;
         }
 
-        /* 提示框優化 */
-        .stAlert {
-            border-radius: 10px !important;
-        }
-
-        /* Tab 優化 */
+        /* 11. Tab 選項卡 */
         [data-testid="stTabs"] {
-            border-bottom: 2px solid #faedcd !important;
+            border-bottom: 2px solid #e9ecef !important;
+        }
+        button[data-baseweb="tab"] {
+            color: #6c757d;
+        }
+        button[data-baseweb="tab"][aria-selected="true"] {
+            color: #52796f;
+            font-weight: bold;
         }
 
     </style>
@@ -1605,7 +1618,7 @@ def main():
 
     with st.sidebar:
         st.title("🏠 幸福之家")
-        st.caption("v13.9 Plus UI 美化版")
+        st.caption("v13.10 柔和護眼版")
         st.divider()
         menu = st.radio("主選單", [
             "📊 儀表板",
