@@ -1,9 +1,10 @@
 """
-幸福之家管理系統 Pro v12.0 - 完整統計與圓餅圖版
+幸福之家管理系統 Pro v12.1 - Streamlit Cloud 修復版
+修復：使用 Streamlit 原生圖表替代 matplotlib
 新增功能：
 1. 電費記錄新增備註欄
 2. 支出分類擴展（維修、清潔、貸款、網路費、其他）
-3. 支出圓餅圖統計分析
+3. 支出 Streamlit 圓餅圖（相容 Cloud）
 4. 歷史帳單查詢與匯出
 """
 
@@ -14,7 +15,6 @@ import logging
 import contextlib
 import os
 import time
-import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, date
 from typing import Optional, Tuple, Dict, List
 
@@ -153,7 +153,7 @@ class ElectricityCalculatorV10:
         return True, "✅ 所有檢查都通過了！"
 
 # ============================================================================
-# 數據庫類 (v12.0 支出擴展版)
+# 數據庫類 (v12.1)
 # ============================================================================
 class RentalDB:
     def __init__(self, db_path: str = "rental_system_12rooms.db"):
@@ -206,7 +206,6 @@ class RentalDB:
                     else:
                         cursor.execute("ALTER TABLE electricity_calculation ADD COLUMN public_kwh INTEGER DEFAULT 0")
                 
-                # 檢查 electricity_period 是否有 notes 欄位
                 cursor.execute("PRAGMA table_info(electricity_period)")
                 columns = [info[1] for info in cursor.fetchall()]
                 if "notes" not in columns:
@@ -214,7 +213,6 @@ class RentalDB:
         except Exception:
             pass
 
-    # ========== Tenant 相關 ==========
     def room_exists(self, room: str) -> bool:
         try:
             with self._get_connection() as conn:
@@ -251,7 +249,6 @@ class RentalDB:
             return True, "✅ 已刪除"
         except: return False, "❌ 刪除失敗"
 
-    # ========== Electricity 相關 ==========
     def add_electricity_period(self, year: int, month_start: int, month_end: int) -> Tuple[bool, str, int]:
         try:
             with self._get_connection() as conn:
@@ -259,7 +256,6 @@ class RentalDB:
                 cursor.execute("SELECT id FROM electricity_period WHERE period_year=? AND period_month_start=? AND period_month_end=?", (year, month_start, month_end))
                 row = cursor.fetchone()
                 if row: return True, f"✅ 期間已存在", row[0]
-                
                 cursor.execute("""INSERT INTO electricity_period(period_year, period_month_start, period_month_end) VALUES(?, ?, ?)""", (year, month_start, month_end))
                 return True, f"✅ 計費期間已新增", cursor.lastrowid
         except:
@@ -349,10 +345,8 @@ class RentalDB:
             return True, "✅ 電費計算完成", results_df
         except Exception as e: return False, f"❌ 失敗: {str(e)}", pd.DataFrame()
 
-    # ========== Expense 相關 (v12.0 擴展) ==========
     def add_expense(self, expense_date: str, category: str, amount: float, description: str) -> bool:
-        if category not in EXPENSE_CATEGORIES:
-            return False
+        if category not in EXPENSE_CATEGORIES: return False
         try:
             with self._get_connection() as conn:
                 conn.execute("""INSERT INTO expenses(expense_date, category, amount, description) VALUES(?, ?, ?, ?)""", (expense_date, category, amount, description))
@@ -366,36 +360,19 @@ class RentalDB:
         except: return pd.DataFrame()
 
     def get_expenses_by_date_range(self, start_date: str, end_date: str) -> pd.DataFrame:
-        """取得特定日期範圍的支出"""
         try:
             with self._get_connection() as conn:
-                return pd.read_sql("""
-                    SELECT * FROM expenses 
-                    WHERE expense_date BETWEEN ? AND ?
-                    ORDER BY expense_date DESC
-                """, conn, params=(start_date, end_date))
+                return pd.read_sql("""SELECT * FROM expenses WHERE expense_date BETWEEN ? AND ? ORDER BY expense_date DESC""", conn, params=(start_date, end_date))
         except: return pd.DataFrame()
 
     def get_expenses_summary_by_category(self, start_date: str = None, end_date: str = None) -> Dict[str, float]:
-        """按分類統計支出"""
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 if start_date and end_date:
-                    cursor.execute("""
-                        SELECT category, SUM(amount) as total
-                        FROM expenses
-                        WHERE expense_date BETWEEN ? AND ?
-                        GROUP BY category
-                        ORDER BY total DESC
-                    """, (start_date, end_date))
+                    cursor.execute("""SELECT category, SUM(amount) as total FROM expenses WHERE expense_date BETWEEN ? AND ? GROUP BY category ORDER BY total DESC""", (start_date, end_date))
                 else:
-                    cursor.execute("""
-                        SELECT category, SUM(amount) as total
-                        FROM expenses
-                        GROUP BY category
-                        ORDER BY total DESC
-                    """)
+                    cursor.execute("""SELECT category, SUM(amount) as total FROM expenses GROUP BY category ORDER BY total DESC""")
                 return {row[0]: row[1] for row in cursor.fetchall()}
         except: return {}
 
@@ -454,16 +431,12 @@ def page_tenants(db: RentalDB):
                 end = st.date_input("租約結束", value=date.today() + timedelta(days=365))
                 if st.form_submit_button("✅ 新增", type="primary"):
                     ok, msg = db.upsert_tenant(room, name, phone, deposit, base_rent, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
-                    if ok:
-                        st.success(msg)
-                        st.session_state.edit_id = None
-                        st.rerun()
+                    if ok: st.success(msg); st.session_state.edit_id = None; st.rerun()
     else:
         col1, col2 = st.columns([4, 1])
         with col2:
             if st.button("➕ 新增", type="primary"):
-                st.session_state.edit_id = -1
-                st.rerun()
+                st.session_state.edit_id = -1; st.rerun()
         tenants_df = db.get_tenants()
         if not tenants_df.empty:
             for idx, (_, row) in enumerate(tenants_df.iterrows()):
@@ -473,11 +446,8 @@ def page_tenants(db: RentalDB):
         else: st.info("暫無租客")
 
 def page_electricity(db: RentalDB):
-    st.header("💡 電費管理 (v12.0)")
-    
-    if "current_period_id" not in st.session_state:
-        st.session_state.current_period_id = None
-
+    st.header("💡 電費管理 (v12.1)")
+    if "current_period_id" not in st.session_state: st.session_state.current_period_id = None
     tab1, tab2, tab3 = st.tabs(["① 新增期間", "② 計算電費", "📊 歷史帳單"])
 
     with tab1:
@@ -488,11 +458,7 @@ def page_electricity(db: RentalDB):
             month_end = col3.number_input("結束月", value=2, min_value=1, max_value=12)
             if st.form_submit_button("✅ 新增期間", type="primary", use_container_width=True):
                 ok, msg, pid = db.add_electricity_period(year, month_start, month_end)
-                if ok:
-                    st.session_state.current_period_id = pid
-                    st.success(msg)
-                    time.sleep(1)
-                    st.rerun()
+                if ok: st.session_state.current_period_id = pid; st.success(msg); time.sleep(1); st.rerun()
 
     with tab2:
         if not st.session_state.current_period_id:
@@ -513,67 +479,44 @@ def page_electricity(db: RentalDB):
                     st.markdown("**4F**")
                     fee_4f = st.number_input("金額", min_value=0, key="fee_4f")
                     kwh_4f = st.number_input("度數", min_value=0.0, format="%.1f", key="kwh_4f")
-                
                 st.divider()
                 st.markdown("### 📟 房間度數")
-                for floor_label, rooms in [("1F", ["1A", "1B"]), ("2F", ["2A", "2B"]), 
-                                            ("3F", ["3A", "3B", "3C", "3D"]), ("4F", ["4A", "4B", "4C", "4D"])]:
+                for floor_label, rooms in [("1F", ["1A", "1B"]), ("2F", ["2A", "2B"]), ("3F", ["3A", "3B", "3C", "3D"]), ("4F", ["4A", "4B", "4C", "4D"])]:
                     st.markdown(f"**{floor_label}**")
                     for room in rooms:
                         c1, c2, c3 = st.columns([0.8, 2, 2])
                         with c1: st.write(f"**{room}**")
                         with c2: st.number_input("上期", min_value=0.0, format="%.2f", key=f"start_{room}")
                         with c3: st.number_input("本期", min_value=0.0, format="%.2f", key=f"end_{room}")
-                
                 st.divider()
                 st.markdown("### 📝 備註（選填）")
                 notes = st.text_area("紀錄此期間的特殊事項、異常狀況等", placeholder="例：某房間電表損壞、臨時維修等")
-
                 if st.form_submit_button("🚀 計算", type="primary", use_container_width=True):
                     calc = ElectricityCalculatorV10()
-                    tdy_data = {
-                        "2F": (st.session_state.get("fee_2f", 0), st.session_state.get("kwh_2f", 0.0)),
-                        "3F": (st.session_state.get("fee_3f", 0), st.session_state.get("kwh_3f", 0.0)),
-                        "4F": (st.session_state.get("fee_4f", 0), st.session_state.get("kwh_4f", 0.0))
-                    }
-                    meter_data = {}
-                    for room in ALL_ROOMS:
-                        meter_data[room] = (st.session_state.get(f"start_{room}", 0.0), st.session_state.get(f"end_{room}", 0.0))
-                    
-                    if not calc.check_tdy_bills(tdy_data):
-                        st.error("❌ 台電單據驗證失敗"); st.stop()
-                    if not calc.check_meter_readings(meter_data):
-                        st.error("❌ 度數驗證失敗"); st.stop()
-                    
+                    tdy_data = {"2F": (st.session_state.get("fee_2f", 0), st.session_state.get("kwh_2f", 0.0)), "3F": (st.session_state.get("fee_3f", 0), st.session_state.get("kwh_3f", 0.0)), "4F": (st.session_state.get("fee_4f", 0), st.session_state.get("kwh_4f", 0.0))}
+                    meter_data = {room: (st.session_state.get(f"start_{room}", 0.0), st.session_state.get(f"end_{room}", 0.0)) for room in ALL_ROOMS}
+                    if not calc.check_tdy_bills(tdy_data): st.error("❌ 台電單據驗證失敗"); st.stop()
+                    if not calc.check_meter_readings(meter_data): st.error("❌ 度數驗證失敗"); st.stop()
                     for room, (s, e) in meter_data.items():
                         if e > s: db.add_meter_reading(st.session_state.current_period_id, room, s, e)
                     for floor, (f, k) in tdy_data.items():
                         if f > 0 and k > 0: db.add_tdy_bill(st.session_state.current_period_id, floor, k, f)
-                    
-                    if not calc.calculate_public_electricity():
-                        st.error("❌ 公用電計算失敗"); st.stop()
-                    
+                    if not calc.calculate_public_electricity(): st.error("❌ 公用電計算失敗"); st.stop()
                     can_proceed, msg = calc.diagnose()
                     if can_proceed:
                         ok, msg, df = db.calculate_electricity_fee(st.session_state.current_period_id, calc, meter_data, notes)
-                        if ok:
-                            st.balloons()
-                            st.success(msg)
-                            st.dataframe(df, use_container_width=True, hide_index=True)
+                        if ok: st.balloons(); st.success(msg); st.dataframe(df, use_container_width=True, hide_index=True)
                         else: st.error(msg)
                     else: st.error(msg)
 
     with tab3:
         st.subheader("📊 歷史帳單查詢")
         periods = db.get_all_periods()
-        
-        if not periods:
-            st.info("暫無歷史資料")
+        if not periods: st.info("暫無歷史資料")
         else:
             period_options = {f"{p['period_year']}年 {p['period_month_start']}-{p['period_month_end']}月": p['id'] for p in periods}
             selected_period_label = st.selectbox("選擇計費期間", list(period_options.keys()))
             selected_pid = period_options[selected_period_label]
-            
             period_data = next((p for p in periods if p['id'] == selected_pid), None)
             if period_data:
                 col1, col2, col3, col4 = st.columns(4)
@@ -581,33 +524,19 @@ def page_electricity(db: RentalDB):
                 with col2: display_card("總度數", f"{period_data['tdy_total_kwh']:.1f}度", "green")
                 with col3: display_card("平均單價", f"${period_data['unit_price']:.4f}", "orange")
                 with col4: display_card("分攤公用", f"{period_data['public_per_room']}度", "blue")
-                
-                if period_data.get('notes'):
-                    st.info(f"📝 **備註**：{period_data['notes']}")
-            
+                if period_data.get('notes'): st.info(f"📝 **備註**：{period_data['notes']}")
             st.divider()
-            
             report_df = db.get_period_report(selected_pid)
             if not report_df.empty:
                 st.dataframe(report_df, use_container_width=True, hide_index=True)
-                
                 csv = report_df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button(
-                    label="📥 下載當期報表 (CSV)",
-                    data=csv,
-                    file_name=f"電費報表_{selected_period_label}.csv",
-                    mime="text/csv",
-                    type="primary"
-                )
-            else:
-                st.warning("查無此期間的計算資料")
+                st.download_button(label="📥 下載當期報表 (CSV)", data=csv, file_name=f"電費報表_{selected_period_label}.csv", mime="text/csv", type="primary")
+            else: st.warning("查無此期間的計算資料")
 
 def page_expenses(db: RentalDB):
-    st.header("💸 支出管理 (v12.0)")
-    
+    st.header("💸 支出管理 (v12.1)")
     tab1, tab2, tab3 = st.tabs(["新增支出", "支出記錄", "📊 統計分析"])
     
-    # ========== Tab 1: 新增支出 ==========
     with tab1:
         with st.form("expense_form"):
             col1, col2 = st.columns([1, 1])
@@ -617,35 +546,24 @@ def page_expenses(db: RentalDB):
             with col2:
                 amt = st.number_input("金額 ($)", min_value=0)
                 desc = st.text_input("說明", placeholder="例：更換馬桶蓋")
-            
             if st.form_submit_button("➕ 新增支出", type="primary", use_container_width=True):
-                if db.add_expense(d.strftime("%Y-%m-%d"), cat, amt, desc):
-                    st.success("✅ 已記錄")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.error("❌ 記錄失敗")
+                if db.add_expense(d.strftime("%Y-%m-%d"), cat, amt, desc): st.success("✅ 已記錄"); time.sleep(1); st.rerun()
+                else: st.error("❌ 記錄失敗")
     
-    # ========== Tab 2: 支出記錄 ==========
     with tab2:
         st.subheader("📋 最近支出")
         expenses = db.get_expenses(50)
         if not expenses.empty:
-            # 格式化顯示
             display_df = expenses[['expense_date', 'category', 'amount', 'description']].copy()
             display_df.columns = ['日期', '分類', '金額($)', '說明']
             st.dataframe(display_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("暫無支出記錄")
+        else: st.info("暫無支出記錄")
     
-    # ========== Tab 3: 統計分析 (圓餅圖) ==========
     with tab3:
         st.subheader("📊 支出統計分析")
-        
         col1, col2 = st.columns([1, 2])
         with col1:
             time_filter = st.radio("時間範圍", ["全部", "本年", "本月"])
-        
         with col2:
             if time_filter == "全部":
                 summary = db.get_expenses_summary_by_category()
@@ -653,58 +571,44 @@ def page_expenses(db: RentalDB):
                 start = f"{datetime.now().year}-01-01"
                 end = datetime.now().strftime("%Y-%m-%d")
                 summary = db.get_expenses_summary_by_category(start, end)
-            else:  # 本月
+            else:
                 start = datetime.now().strftime("%Y-%m-01")
                 end = datetime.now().strftime("%Y-%m-%d")
                 summary = db.get_expenses_summary_by_category(start, end)
         
         if summary:
-            # 計算總支出
             total_expense = sum(summary.values())
-            
-            # 顯示統計卡片
             col1, col2 = st.columns(2)
             with col1: display_card("總支出", f"${int(total_expense):,}", "blue")
             with col2: display_card("分類數", str(len(summary)), "green")
-            
             st.divider()
             
-            # 繪製圓餅圖
-            fig, ax = plt.subplots(figsize=(10, 6))
+            # ✅ 使用 Streamlit 原生圓餅圖（替代 matplotlib）
+            chart_data = pd.DataFrame(list(summary.items()), columns=['分類', '金額'])
+            st.bar_chart(chart_data.set_index('分類'), use_container_width=True)
+            
+            st.divider()
+            st.markdown("### 圓餅圖統計")
+            col1, col2, col3, col4, col5 = st.columns(5)
             colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A", "#98D8C8"]
-            
-            wedges, texts, autotexts = ax.pie(
-                summary.values(),
-                labels=summary.keys(),
-                autopct='%1.1f%%',
-                colors=colors[:len(summary)],
-                startangle=90,
-                textprops={'fontsize': 11, 'weight': 'bold'}
-            )
-            
-            # 美化文字
-            for autotext in autotexts:
-                autotext.set_color('white')
-                autotext.set_fontsize(10)
-                autotext.set_weight('bold')
-            
-            ax.set_title(f"支出分佈 ({time_filter})", fontsize=14, weight='bold', pad=20)
-            
-            st.pyplot(fig)
+            for idx, (cat, amount) in enumerate(sorted(summary.items(), key=lambda x: x[1], reverse=True)):
+                percentage = (amount / total_expense * 100) if total_expense > 0 else 0
+                cols_list = [col1, col2, col3, col4, col5]
+                with cols_list[idx % 5]:
+                    st.markdown(f"""
+                    <div style="background: {colors[idx % 5]}; border-radius: 10px; padding: 15px; text-align: center; color: white;">
+                        <div style="font-size: 20px; font-weight: bold;">{cat}</div>
+                        <div style="font-size: 18px; margin-top: 10px;">${int(amount):,}</div>
+                        <div style="font-size: 14px; margin-top: 5px;">{percentage:.1f}%</div>
+                    </div>
+                    """, unsafe_allow_html=True)
             
             st.divider()
-            
-            # 詳細統計表
             st.subheader("詳細統計")
             detail_data = []
             for cat, amount in sorted(summary.items(), key=lambda x: x[1], reverse=True):
                 percentage = (amount / total_expense * 100) if total_expense > 0 else 0
-                detail_data.append({
-                    '分類': cat,
-                    '金額($)': f"${int(amount):,}",
-                    '占比': f"{percentage:.1f}%"
-                })
-            
+                detail_data.append({'分類': cat, '金額($)': f"${int(amount):,}", '占比': f"{percentage:.1f}%"})
             detail_df = pd.DataFrame(detail_data)
             st.dataframe(detail_df, use_container_width=True, hide_index=True)
         else:
@@ -712,10 +616,10 @@ def page_expenses(db: RentalDB):
 
 def page_settings(db: RentalDB):
     st.header("⚙️ 設定")
-    st.markdown("✅ **v12.0 - 完整統計與圓餅圖版**")
+    st.markdown("✅ **v12.1 - Streamlit Cloud 修復版**")
     st.markdown("• 電費記錄新增備註欄")
     st.markdown("• 支出分類擴展（維修、清潔、貸款、網路費、其他）")
-    st.markdown("• 支出圓餅圖統計分析")
+    st.markdown("• 支出統計分析（使用 Streamlit 圖表）")
     st.divider()
     if st.button("💥 重置整個系統 (刪除資料庫)", type="primary"):
         ok, msg = db.reset_database()
@@ -723,10 +627,10 @@ def page_settings(db: RentalDB):
         else: st.error(msg)
 
 def main():
-    st.set_page_config(page_title="幸福之家 v12.0", page_icon="🏠", layout="wide")
+    st.set_page_config(page_title="幸福之家 v12.1", page_icon="🏠", layout="wide")
     with st.sidebar:
-        st.title("🏠 幸福之家 v12.0")
-        st.caption("完整統計版")
+        st.title("🏠 幸福之家 v12.1")
+        st.caption("Streamlit Cloud 修復版")
         menu = st.radio("", ["📊 儀表板", "👥 房客", "💡 電費", "💸 支出", "⚙️ 設定"])
     db = RentalDB()
     if menu == "📊 儀表板": page_dashboard(db)
