@@ -1,6 +1,6 @@
 """
 幸福之家管理系統 Pro v6.0 - 完整版
-UI 數據流修復版 - 所有問題已解決
+保留所有功能 + 電費計算修復
 
 【核心修正】:
 1. 重寫電費頁面的 st.form 邏輯，確保數據提交後能被正確捕獲
@@ -8,12 +8,17 @@ UI 數據流修復版 - 所有問題已解決
 3. 在寫入數據庫前增加驗證，只寫入有效的數據
 4. 增加詳細的日誌，方便追蹤數據流程
 
+【保留功能】:
+✅ 儀表板 (Dashboard)
+✅ 房客管理 (Tenants)
+✅ 電費管理 (Electricity) - 已修復
+✅ 支出管理 (Expenses)
+✅ 設定 (Settings)
+
 【特性】:
 - 完全解決「尚未輸入電錶度數」的計算失敗問題
 - 表單提交穩定可靠，數據不丟失
-- 用戶體驗流暢，錯誤提示清晰
-- 完整的租客管理功能
-- 完整的電費計算功能
+- 所有其他功能保持不變
 """
 
 import streamlit as st
@@ -24,7 +29,7 @@ import contextlib
 import os
 import time
 from datetime import datetime, timedelta, date
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple, Dict, List, Any
 
 # ============================================================================
 # 日誌配置
@@ -50,10 +55,10 @@ ROOM_FLOOR_MAP = {
 }
 
 # ============================================================================
-# 數據庫類 (v6.0 完整版)
+# 數據庫類 (完整版，v6.0 修復電費計算)
 # ============================================================================
 class RentalDB:
-    """數據庫操作類 - v6.0 完整版"""
+    """數據庫操作類"""
     
     def __init__(self, db_path: str = "rental_system_12rooms.db"):
         self.db_path = db_path
@@ -183,6 +188,48 @@ class RentalDB:
                 )
             """)
             
+            # electricity_prepaid 表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS electricity_prepaid (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    room_number TEXT NOT NULL,
+                    prepaid_amount REAL NOT NULL,
+                    prepaid_date TEXT NOT NULL,
+                    balance REAL NOT NULL,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # payments 表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    room_number TEXT NOT NULL,
+                    payment_date TEXT NOT NULL,
+                    base_rent REAL DEFAULT 0,
+                    electricity_fee REAL DEFAULT 0,
+                    payment_amount REAL NOT NULL,
+                    payment_type TEXT,
+                    status TEXT DEFAULT '已收',
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # expenses 表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS expenses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    expense_date TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    description TEXT,
+                    room_number TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
             # 建立索引
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tenants_room ON tenants(room_number)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tenants_active ON tenants(is_active)")
@@ -232,6 +279,7 @@ class RentalDB:
                         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (room, name, phone, deposit, base_rent, elec_fee, monthly_rent, start, end, 
                           method, discount, water, prepaid, notes))
+                    logging.info(f"Created tenant {room}")
                     return True, f"✅ 房號 {room} 已新增"
         except Exception as e:
             logging.error(f"upsert_tenant error: {e}")
@@ -268,6 +316,7 @@ class RentalDB:
         try:
             with self._get_connection() as conn:
                 conn.execute("UPDATE tenants SET is_active=0 WHERE id=?", (tid,))
+            logging.info(f"Deleted tenant ID {tid}")
             return True, "✅ 已刪除"
         except Exception as e:
             return False, f"❌ 刪除失敗: {str(e)}"
@@ -304,7 +353,7 @@ class RentalDB:
                     VALUES(?, ?, ?, ?)
                 """, (year, month_start, month_end, notes))
                 period_id = cursor.lastrowid
-                logging.info(f"DB: Created period ID {period_id} ({year}年 {month_start}-{month_end}月)")
+                logging.info(f"Created period ID {period_id}")
                 return True, f"✅ 計費期間 {year}年 {month_start}-{month_end}月 已新增", period_id
         except Exception as e:
             logging.error(f"add_electricity_period error: {e}")
@@ -318,7 +367,7 @@ class RentalDB:
                     INSERT OR REPLACE INTO electricity_tdy_bill(period_id, floor_name, tdy_total_kwh, tdy_total_fee)
                     VALUES(?, ?, ?, ?)
                 """, (period_id, floor_name, tdy_kwh, tdy_fee))
-                logging.info(f"DB: Added TDY bill for {floor_name}, period {period_id}: {tdy_kwh}kwh, ${tdy_fee}")
+                logging.info(f"Added TDY bill for {floor_name}: {tdy_kwh}kwh, ${tdy_fee}")
                 return True
         except Exception as e:
             logging.error(f"add_tdy_bill error: {e}")
@@ -333,10 +382,10 @@ class RentalDB:
                     INSERT OR REPLACE INTO electricity_meter(period_id, room_number, meter_start_reading, meter_end_reading, meter_kwh_usage)
                     VALUES(?, ?, ?, ?, ?)
                 """, (period_id, room, start, end, kwh_usage))
-                logging.info(f"DB: Added meter for {room}, period {period_id}: {start} -> {end} ({kwh_usage} kwh)")
+                logging.info(f"Added meter for {room}: {start}->{end} ({kwh_usage}kwh)")
                 return True
         except Exception as e:
-            logging.error(f"add_meter_reading error for {room}: {e}")
+            logging.error(f"add_meter_reading error: {e}")
             return False
 
     def get_sharing_config(self, period_id: int, room_number: str) -> int:
@@ -378,22 +427,22 @@ class RentalDB:
                     SELECT floor_name, tdy_total_kwh, tdy_total_fee FROM electricity_tdy_bill WHERE period_id=?
                 """, (period_id,))
                 tdy_bills = cursor.fetchall()
-                logging.info(f"CALC: Found {len(tdy_bills)} TDY bills.")
+                logging.info(f"CALC: Found {len(tdy_bills)} TDY bills")
                 
                 if not tdy_bills:
-                    logging.error("CALC: No TDY bills found in database.")
-                    return False, "❌ 計算失敗：資料庫中沒有此期間的台電單據。請檢查您是否正確輸入。", pd.DataFrame()
+                    logging.error("CALC: No TDY bills found")
+                    return False, "❌ 尚未輸入台電單據", pd.DataFrame()
 
                 # 查詢電錶度數
                 cursor.execute("""
                     SELECT room_number, meter_kwh_usage FROM electricity_meter WHERE period_id=?
                 """, (period_id,))
                 meters = cursor.fetchall()
-                logging.info(f"CALC: Found {len(meters)} meter readings.")
+                logging.info(f"CALC: Found {len(meters)} meter readings")
                 
                 if not meters:
-                    logging.error("CALC: No meter readings found in database.")
-                    return False, "❌ 計算失敗：資料庫中沒有此期間的房間度數。請檢查您是否正確輸入。", pd.DataFrame()
+                    logging.error("CALC: No meter readings found")
+                    return False, "❌ 尚未輸入電錶度數", pd.DataFrame()
 
                 results = []
                 
@@ -402,7 +451,6 @@ class RentalDB:
                     floor_rooms = [(room, kwh) for room, kwh in meters if ROOM_FLOOR_MAP.get(room) == floor_name]
                     
                     if not floor_rooms:
-                        logging.warning(f"CALC: No rooms found for floor {floor_name}")
                         continue
                     
                     private_kwh_sum = sum(kwh for _, kwh in floor_rooms)
@@ -411,33 +459,76 @@ class RentalDB:
                     kwh_per_room = public_kwh / sharing_count if sharing_count > 0 else 0
                     avg_price = tdy_fee / tdy_kwh if tdy_kwh > 0 else 0
                     
-                    logging.info(f"CALC: {floor_name}: tdy_kwh={tdy_kwh}, private_sum={private_kwh_sum}, public={public_kwh}, avg_price=${avg_price:.2f}")
-                    
                     for room, private_kwh in floor_rooms:
                         is_sharing = self.get_sharing_config(period_id, room)
                         allocated_kwh = kwh_per_room if is_sharing == 1 else 0
                         total_kwh = private_kwh + allocated_kwh
                         calculated_fee = total_kwh * avg_price
                         
+                        cursor.execute("""
+                            SELECT balance FROM electricity_prepaid WHERE room_number=? ORDER BY created_at DESC LIMIT 1
+                        """, (room,))
+                        prepaid_row = cursor.fetchone()
+                        prepaid_balance = prepaid_row[0] if prepaid_row else 0
+                        actual_payment = max(0, calculated_fee - prepaid_balance)
+                        
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO electricity_calculation(
+                                period_id, room_number, floor_name, private_kwh, allocated_kwh, total_kwh,
+                                avg_price, calculated_fee, prepaid_balance, actual_payment)
+                            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (period_id, room, floor_name, private_kwh, allocated_kwh, total_kwh,
+                              avg_price, calculated_fee, prepaid_balance, actual_payment))
+                        
                         results.append({
                             '房號': room,
                             '樓層': floor_name,
-                            '私錶度數': f"{private_kwh:.1f}",
-                            '公電分攤': f"{allocated_kwh:.1f}",
-                            '總度數': f"{total_kwh:.1f}",
-                            '均價': f"${avg_price:.2f}",
-                            '應繳電費': f"${calculated_fee:.0f}"
+                            '私錶': f"{private_kwh:.0f}",
+                            '分攤': f"{allocated_kwh:.0f}",
+                            '合計': f"{total_kwh:.0f}",
+                            '電價': f"${avg_price:.2f}",
+                            '應繳': f"${calculated_fee:.0f}",
+                            '預繳': f"${prepaid_balance:.0f}",
+                            '實收': f"${actual_payment:.0f}"
                         })
-                        logging.info(f"CALC: {room}: {private_kwh:.1f} + {allocated_kwh:.1f} = {total_kwh:.1f} kwh, ${calculated_fee:.0f}")
 
-                logging.info(f"CALC: Success - {len(results)} records generated")
+                logging.info(f"CALC: Success - {len(results)} records")
                 logging.info("="*60)
                 return True, "✅ 電費計算完成", pd.DataFrame(results)
 
         except Exception as e:
-            logging.error(f"CALC: Critical error: {e}", exc_info=True)
+            logging.error(f"CALC: Error: {e}", exc_info=True)
             logging.info("="*60)
             return False, f"❌ 計算失敗: {str(e)}", pd.DataFrame()
+
+    # ============================================================================
+    # 支出管理方法
+    # ============================================================================
+    def add_expense(self, expense_date: str, category: str, amount: float, description: str, room_number: str = "") -> bool:
+        """新增支出"""
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO expenses(expense_date, category, amount, description, room_number)
+                    VALUES(?, ?, ?, ?, ?)
+                """, (expense_date, category, amount, description, room_number))
+                logging.info(f"Added expense: {category} ${amount}")
+                return True
+        except Exception as e:
+            logging.error(f"add_expense error: {e}")
+            return False
+
+    def get_expenses(self, limit: int = 20) -> pd.DataFrame:
+        """獲取支出列表"""
+        try:
+            with self._get_connection() as conn:
+                return pd.read_sql(
+                    "SELECT * FROM expenses ORDER BY expense_date DESC LIMIT ?",
+                    conn,
+                    params=(limit,)
+                )
+        except:
+            return pd.DataFrame()
 
 # ============================================================================
 # UI 工具函數
@@ -453,17 +544,200 @@ def display_card(title: str, value: str, color: str = "blue"):
     </div>
     """, unsafe_allow_html=True)
 
+def days_until_date(date_str: str) -> int:
+    """計算距離天數"""
+    try:
+        target = datetime.strptime(date_str, "%Y-%m-%d").date()
+        return (target - date.today()).days
+    except:
+        return 999
+
 # ============================================================================
-# UI 頁面層 (v6.0 核心修復)
+# UI 頁面層
 # ============================================================================
+def page_dashboard(db: RentalDB):
+    """儀表板頁面"""
+    st.header("📊 儀表板")
+    
+    tenants = db.get_tenants()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        occupancy = len(tenants)
+        rate = (occupancy / 12 * 100) if occupancy > 0 else 0
+        display_card("入住率", f"{rate:.0f}%", "blue")
+    
+    with col2:
+        total = tenants['monthly_rent'].sum() if not tenants.empty else 0
+        display_card("月租金", f"${total:,.0f}", "green")
+    
+    with col3:
+        elec = tenants['electricity_fee'].sum() if not tenants.empty else 0
+        display_card("月電費", f"${elec:,.0f}", "orange")
+    
+    with col4:
+        prepaid = tenants['prepaid_electricity'].sum() if not tenants.empty else 0
+        display_card("預繳電費", f"${prepaid:,.0f}", "blue")
+    
+    st.divider()
+    
+    st.subheader("🏠 房間狀態")
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        active_rooms = tenants['room_number'].tolist() if not tenants.empty else []
+        cols = st.columns(6)
+        for i, room in enumerate(ALL_ROOMS):
+            with cols[i % 6]:
+                if room in active_rooms:
+                    t = tenants[tenants['room_number'] == room].iloc[0]
+                    days = days_until_date(t['lease_end'])
+                    st.success(f"{room}\n{t['tenant_name']}")
+                    if days < 60:
+                        st.caption(f"⚠️ {days}天")
+                else:
+                    st.error(f"{room}\n空房")
+
+def page_tenants(db: RentalDB):
+    """房客管理頁面"""
+    st.header("👥 房客管理")
+    
+    if "edit_id" not in st.session_state:
+        st.session_state.edit_id = None
+    
+    if st.session_state.edit_id is not None and st.session_state.edit_id != -1:
+        tenant = db.get_tenant_by_id(st.session_state.edit_id)
+        if not tenant:
+            st.error("租客不存在")
+            if st.button("返回"):
+                st.session_state.edit_id = None
+                st.rerun()
+            return
+        
+        st.subheader(f"編輯 {tenant['room_number']} - {tenant['tenant_name']}")
+        
+        with st.form("edit_form"):
+            name = st.text_input("姓名", value=tenant['tenant_name'])
+            phone = st.text_input("電話", value=tenant['phone'] or "")
+            deposit = st.number_input("押金", value=tenant['deposit'])
+            base_rent = st.number_input("基本房租", value=tenant['base_rent'])
+            elec_fee = st.number_input("電費", value=tenant['electricity_fee'])
+            
+            start_date = datetime.strptime(tenant['lease_start'], "%Y-%m-%d").date()
+            end_date = datetime.strptime(tenant['lease_end'], "%Y-%m-%d").date()
+            
+            start = st.date_input("租約開始", value=start_date)
+            end = st.date_input("租約結束", value=end_date)
+            
+            method = st.selectbox("繳款方式", ["月繳", "半年繳", "年繳"], 
+                                 index=["月繳", "半年繳", "年繳"].index(tenant['payment_method']))
+            discount = st.number_input("年折扣月數", value=tenant['annual_discount_months'], min_value=0, max_value=12)
+            water = st.checkbox("水費折扣", value=bool(tenant['has_water_discount']))
+            prepaid = st.number_input("預繳電費", value=tenant['prepaid_electricity'])
+            notes = st.text_area("備註", value=tenant['notes'] or "")
+            
+            col1, col2 = st.columns(2)
+            if col1.form_submit_button("✅ 更新", type="primary"):
+                ok, msg = db.upsert_tenant(tenant['room_number'], name, phone, deposit, base_rent, 
+                                          elec_fee, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"),
+                                          method, discount, int(water), prepaid, notes, st.session_state.edit_id)
+                if ok:
+                    st.success(msg)
+                    st.session_state.edit_id = None
+                    st.rerun()
+                else:
+                    st.error(msg)
+            
+            if col2.form_submit_button("取消"):
+                st.session_state.edit_id = None
+                st.rerun()
+    
+    elif st.session_state.edit_id == -1:
+        st.subheader("新增租客")
+        tenants_df = db.get_tenants()
+        existing = tenants_df['room_number'].tolist() if not tenants_df.empty else []
+        available = [r for r in ALL_ROOMS if r not in existing]
+        
+        if not available:
+            st.error("沒有可用房間")
+            if st.button("返回"):
+                st.session_state.edit_id = None
+                st.rerun()
+            return
+        
+        with st.form("add_form"):
+            room = st.selectbox("房號", available)
+            name = st.text_input("姓名")
+            phone = st.text_input("電話")
+            deposit = st.number_input("押金", value=10000)
+            base_rent = st.number_input("房租", value=6000)
+            elec_fee = st.number_input("電費", value=0)
+            start = st.date_input("租約開始")
+            end = st.date_input("租約結束", value=date.today() + timedelta(days=365))
+            method = st.selectbox("繳款方式", ["月繳", "半年繳", "年繳"])
+            discount = st.number_input("年折扣月數", value=0, min_value=0, max_value=12)
+            water = st.checkbox("水費折扣", value=False)
+            notes = st.text_area("備註")
+            
+            if st.form_submit_button("✅ 新增", type="primary"):
+                if not name:
+                    st.error("請輸入姓名")
+                else:
+                    ok, msg = db.upsert_tenant(room, name, phone, deposit, base_rent, elec_fee,
+                                              start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"),
+                                              method, discount, int(water), 0, notes)
+                    if ok:
+                        st.success(msg)
+                        st.session_state.edit_id = None
+                        st.rerun()
+                    else:
+                        st.error(msg)
+    
+    else:
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.subheader("租客列表")
+        with col2:
+            if st.button("➕ 新增租客", type="primary"):
+                st.session_state.edit_id = -1
+                st.rerun()
+        
+        tenants_df = db.get_tenants()
+        if not tenants_df.empty:
+            for idx, (_, row) in enumerate(tenants_df.iterrows()):
+                with st.expander(f"{row['room_number']} - {row['tenant_name']} (${row['monthly_rent']:,.0f})"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"電話: {row['phone']}")
+                        st.write(f"房租: ${row['base_rent']:,.0f}")
+                        st.write(f"電費: ${row['electricity_fee']:,.0f}")
+                    with col2:
+                        st.write(f"租約: {row['lease_start']} 至 {row['lease_end']}")
+                        st.write(f"繳款: {row['payment_method']}")
+                    
+                    col1, col2 = st.columns(2)
+                    if col1.button("✏️ 編輯", key=f"edit_{idx}"):
+                        st.session_state.edit_id = row['id']
+                        st.rerun()
+                    if col2.button("🗑️ 刪除", key=f"del_{idx}"):
+                        ok, msg = db.delete_tenant(row['id'])
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+        else:
+            st.info("暫無租客")
+
 def page_electricity(db: RentalDB):
-    """電費管理頁面"""
+    """電費管理頁面 - v6.0 修復版"""
     st.header("💡 電費管理 (v6.0 修復版)")
     
     if "current_period_id" not in st.session_state:
         st.session_state.current_period_id = None
 
-    tab1, tab2 = st.tabs(["① 新增/選擇期間", "② 輸入度數並計算"])
+    tab1, tab2 = st.tabs(["① 新增期間", "② 輸入度數並計算"])
 
     with tab1:
         st.subheader("新增計費期間")
@@ -485,11 +759,11 @@ def page_electricity(db: RentalDB):
         if st.session_state.current_period_id:
             period_info = db.get_period_info(st.session_state.current_period_id)
             if period_info:
-                st.success(f"✅ 當前期間: {period_info['year']}年 {period_info['month_start']}-{period_info['month_end']}月 (ID: {period_info['id']})")
+                st.success(f"✅ 當前期間: {period_info['year']}年 {period_info['month_start']}-{period_info['month_end']}月")
 
     with tab2:
         if not st.session_state.current_period_id:
-            st.warning("⚠️ 請先在「① 新增/選擇期間」分頁中新增一個計費期間。")
+            st.warning("⚠️ 請先在「① 新增期間」分頁建立計費期間")
             st.stop()
             
         period_id = st.session_state.current_period_id
@@ -539,7 +813,7 @@ def page_electricity(db: RentalDB):
 
         if submitted:
             logging.info("="*60)
-            logging.info("UI: Form submitted. Processing data...")
+            logging.info("UI: Form submitted")
             
             st.info("正在處理您的數據...")
             
@@ -552,7 +826,7 @@ def page_electricity(db: RentalDB):
             }
             
             for floor, (fee, kwh) in tdy_data.items():
-                logging.info(f"UI: Reading TDY {floor}: fee=${fee}, kwh={kwh}")
+                logging.info(f"UI: TDY {floor}: fee={fee}, kwh={kwh}")
                 if fee > 0 and kwh > 0:
                     if db.add_tdy_bill(period_id, floor, kwh, fee):
                         tdy_written.append(floor)
@@ -562,15 +836,15 @@ def page_electricity(db: RentalDB):
             for room in ALL_ROOMS:
                 start = st.session_state.get(f"start_{room}", 0.0)
                 end = st.session_state.get(f"end_{room}", 0.0)
-                logging.info(f"UI: Reading meter {room}: {start} -> {end}")
+                logging.info(f"UI: Meter {room}: {start}->{end}")
                 if end > start:
                     if db.add_meter_reading(period_id, room, start, end):
                         meter_written.append(room)
             
-            st.success(f"✅ 寫入報告：成功寫入 {len(tdy_written)} 筆台電單據 ({', '.join(tdy_written)})，{len(meter_written)} 筆房間度數。")
+            st.success(f"✅ 寫入完成：{len(tdy_written)} 筆台電單據，{len(meter_written)} 筆房間度數")
             
             # 執行計算
-            with st.spinner("⏳ 正在為您計算電費..."):
+            with st.spinner("⏳ 正在計算電費..."):
                 time.sleep(0.5)
                 ok, msg, df = db.calculate_electricity_fee(period_id)
             
@@ -580,13 +854,55 @@ def page_electricity(db: RentalDB):
                 st.dataframe(df, use_container_width=True, hide_index=True)
             else:
                 st.error(msg)
-                st.info("💡 **故障排除：**")
-                st.info("1. 確認您已輸入台電單據（2F、3F、4F 的金額和度數）")
-                st.info("2. 確認您已輸入房間度數（本期度數必須大於上期度數）")
-                st.info("3. 檢查日誌文件：logs/rental_system.log")
+                st.info("💡 檢查清單：1) 是否輸入台電單據？ 2) 本期 > 上期？ 3) 查看 logs/rental_system.log")
+
+def page_expenses(db: RentalDB):
+    """支出管理頁面"""
+    st.header("💸 支出管理")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.subheader("新增支出")
+        with st.form("expense_form"):
+            d = st.date_input("日期")
+            cat = st.selectbox("類別", ["維修", "清潔", "水電瓦斯", "其他"])
+            amt = st.number_input("金額", min_value=0)
+            room = st.selectbox("房間", ["共用"] + ALL_ROOMS)
+            desc = st.text_input("說明")
+            
+            if st.form_submit_button("➕ 新增", type="primary", use_container_width=True):
+                room_val = "" if room == "共用" else room
+                if db.add_expense(d.strftime("%Y-%m-%d"), cat, amt, desc, room_val):
+                    st.success("已記錄")
+                    st.rerun()
+    
+    with col2:
+        st.subheader("最近支出")
+        expenses = db.get_expenses(15)
+        if not expenses.empty:
+            st.dataframe(expenses[['expense_date', 'category', 'amount', 'description', 'room_number']], 
+                        use_container_width=True, hide_index=True)
+        else:
+            st.info("暫無支出")
+
+def page_settings(db: RentalDB):
+    """設定頁面"""
+    st.header("⚙️ 設定")
+    
+    st.subheader("系統信息")
+    display_card("版本", "v6.0", "blue")
+    display_card("數據庫", "rental_system_12rooms.db", "green")
+    display_card("日誌", "logs/rental_system.log", "orange")
+    
+    st.divider()
+    st.markdown("✅ **修復內容**")
+    st.markdown("- v6.0: 電費計算 UI 數據流修復")
+    st.markdown("- 解決數據丟失問題")
+    st.markdown("- 確保計算結果準確")
 
 # ============================================================================
-# 主程式進入點
+# 主程式
 # ============================================================================
 def main():
     st.set_page_config(
@@ -596,22 +912,26 @@ def main():
         initial_sidebar_state="expanded"
     )
     
-    # 側邊欄配置
     with st.sidebar:
-        st.title("🏠 幸福之家管理系統")
-        st.caption("v6.0 - UI 修復版")
+        st.title("🏠 幸福之家")
+        st.caption("v6.0 - 完整版")
         st.markdown("---")
-        st.markdown("✅ **v6.0 新增功能**")
-        st.markdown("- 完全修復數據丟失問題")
-        st.markdown("- 電費計算完全可靠")
-        st.markdown("- 詳細日誌追蹤")
+        menu = st.radio("導航", ["📊 儀表板", "👥 房客管理", "💡 電費管理", "💸 支出管理", "⚙️ 設定"])
         st.markdown("---")
+        st.markdown("✅ v6.0 修復版")
     
-    # 數據庫初始化
     db = RentalDB()
     
-    # 主頁面
-    page_electricity(db)
+    if menu == "📊 儀表板":
+        page_dashboard(db)
+    elif menu == "👥 房客管理":
+        page_tenants(db)
+    elif menu == "💡 電費管理":
+        page_electricity(db)
+    elif menu == "💸 支出管理":
+        page_expenses(db)
+    else:
+        page_settings(db)
 
 if __name__ == "__main__":
     main()
