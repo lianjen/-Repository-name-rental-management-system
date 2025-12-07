@@ -1,16 +1,6 @@
 """
-幸福之家管理系統 Pro v10.0 - 完全修復版（資料庫自動遷移）
-自動檢測舊表結構，自動升級到新表結構
-
-【v10.0 完全正確邏輯 + 資料庫自動修復】
-
-第 1 步：計算當期電度單價 = 台電總金額 ÷ 台電總度數
-第 2 步：計算公用電度數 = 台電總度數 - (2A~4D 的私表度數)
-第 3 步：計算分攤度數 = 公用電度數 ÷ 10間（四捨五入成整數）
-第 4 步：計費清單 = 只有 2A~4D，1A~1B 在說明欄記錄
-
-【資料庫自動遷移】
-如果表結構不符，自動升級到新版本
+幸福之家管理系統 Pro v10.2 - Streamlit Cloud 專用修復版
+自動修復資料庫欄位 + 手動重置功能
 """
 
 import streamlit as st
@@ -43,10 +33,10 @@ SHARING_ROOMS = ["2A", "2B", "3A", "3B", "3C", "3D", "4A", "4B", "4C", "4D"]
 NON_SHARING_ROOMS = ["1A", "1B"]
 
 # ============================================================================
-# 電費計算類 (v10.0)
+# 電費計算類
 # ============================================================================
 class ElectricityCalculatorV10:
-    """電費計算類 - v10.0"""
+    """電費計算類 - v10.2"""
     
     def __init__(self):
         self.errors = []
@@ -61,7 +51,6 @@ class ElectricityCalculatorV10:
     def check_tdy_bills(self, tdy_data: Dict[str, Tuple[float, float]]) -> bool:
         """【第 1 步】檢查台電單據"""
         st.markdown("### 📊 【第 1 步】台電單據檢查")
-        
         valid_count = 0
         total_kwh = 0
         total_fee = 0
@@ -97,13 +86,11 @@ class ElectricityCalculatorV10:
         st.info(f"   台電總度數: {total_kwh:.2f}度")
         st.info(f"   台電總金額: ${total_fee:,.0f}")
         st.success(f"📊 【當期電度單價】${self.unit_price:.4f}/度")
-        
         return True
     
     def check_meter_readings(self, meter_data: Dict[str, Tuple[float, float]]) -> bool:
         """【第 2 步】檢查房間度數"""
         st.markdown("### 📟 【第 2 步】房間度數檢查")
-        
         valid_count = 0
         total_kwh = 0
         
@@ -142,13 +129,11 @@ class ElectricityCalculatorV10:
         
         st.success(f"✅ 房間度數驗證通過: {valid_count} 間房間")
         st.info(f"   分攤房間私表總度數: {self.meter_total_kwh:.2f}度")
-        
         return True
     
     def calculate_public_electricity(self) -> bool:
         """【第 2-3 步】計算公用電度數和分攤度數"""
         st.markdown("### ⚖️ 【第 2-3 步】公用電計算")
-        
         self.public_kwh = round(self.tdy_total_kwh - self.meter_total_kwh, 2)
         
         st.info(f"公用電度數 = 台電總度數 - 分攤房間私表總度數")
@@ -161,35 +146,43 @@ class ElectricityCalculatorV10:
             return False
         
         self.public_per_room = round(self.public_kwh / len(SHARING_ROOMS))
-        
         st.info(f"每戶分攤度數 = 公用電度數 ÷ {len(SHARING_ROOMS)}間")
         st.info(f"            = {self.public_kwh:.2f} ÷ {len(SHARING_ROOMS)}")
         st.success(f"            = {self.public_per_room}度/戶（四捨五入）")
-        
         return True
     
     def diagnose(self) -> Tuple[bool, str]:
         """最終診斷"""
         st.markdown("---")
-        
         if self.errors:
             error_msg = "🔴 **檢測到以下錯誤：**\n\n"
             for error in self.errors:
                 error_msg += f"• {error}\n"
             return False, error_msg
-        
         return True, "✅ 所有檢查都通過了！"
 
 # ============================================================================
-# 數據庫類 (v10.0 - 自動遷移)
+# 數據庫類 (Cloud Fix v10.2)
 # ============================================================================
 class RentalDB:
-    """數據庫操作類 - v10.0 自動遷移版"""
+    """數據庫操作類 - Streamlit Cloud 專用修復版"""
     
     def __init__(self, db_path: str = "rental_system_12rooms.db"):
         self.db_path = db_path
         self._init_db()
-        self._migrate_tables()  # 自動遷移
+        self._force_fix_schema()  # ✅ 每次啟動自動修復
+
+    def reset_database(self):
+        """💥 刪除數據庫檔案 (Cloud Reset)"""
+        try:
+            if os.path.exists(self.db_path):
+                os.remove(self.db_path)
+                logging.info("✅ Database reset - file deleted")
+                return True, "✅ 資料庫已重置，請重新整理頁面"
+            return False, "⚠️ 資料庫檔案不存在"
+        except Exception as e:
+            logging.error(f"Reset failed: {e}")
+            return False, f"❌ 重置失敗: {e}"
 
     @contextlib.contextmanager
     def _get_connection(self):
@@ -207,7 +200,7 @@ class RentalDB:
             conn.close()
 
     def _init_db(self):
-        """初始化數據庫表"""
+        """初始化資料庫表結構"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
@@ -266,7 +259,7 @@ class RentalDB:
                 )
             """)
             
-            # 【重點】正確的表結構 - 改用 public_kwh，簡潔且清晰
+            # ✅ 確保 electricity_calculation 有 public_kwh 欄位
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_calculation (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -295,66 +288,35 @@ class RentalDB:
                 )
             """)
 
-    def _migrate_tables(self):
-        """自動遷移 - 檢測舊表結構並升級"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 檢查 electricity_calculation 表是否存在
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='electricity_calculation'")
-            if cursor.fetchone() is None:
-                return  # 表不存在，說明是新數據庫
-            
-            # 檢查是否有 public_allocated_kwh 欄位（舊版本）
-            cursor.execute("PRAGMA table_info(electricity_calculation)")
-            columns = [row[1] for row in cursor.fetchall()]
-            
-            if "public_allocated_kwh" in columns:
-                # 舊版本存在，需要遷移
-                logging.info("Migrating electricity_calculation table...")
+    def _force_fix_schema(self):
+        """✅ 自動修復：檢測並新增缺失的 public_kwh 欄位"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
                 
-                try:
-                    # 1. 建立新表
-                    cursor.execute("""
-                        CREATE TABLE electricity_calculation_new (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            period_id INTEGER NOT NULL,
-                            room_number TEXT NOT NULL,
-                            private_kwh REAL NOT NULL,
-                            public_kwh INTEGER NOT NULL,
-                            total_kwh REAL NOT NULL,
-                            unit_price REAL NOT NULL,
-                            calculated_fee REAL NOT NULL,
-                            notes TEXT,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            FOREIGN KEY(period_id) REFERENCES electricity_period(id),
-                            UNIQUE(period_id, room_number)
-                        )
-                    """)
-                    
-                    # 2. 複製數據（public_allocated_kwh → public_kwh）
-                    cursor.execute("""
-                        INSERT INTO electricity_calculation_new (
-                            id, period_id, room_number, private_kwh, public_kwh, 
-                            total_kwh, unit_price, calculated_fee, notes, created_at
-                        )
-                        SELECT 
-                            id, period_id, room_number, private_kwh, public_allocated_kwh,
-                            total_kwh, unit_price, calculated_fee, notes, created_at
-                        FROM electricity_calculation
-                    """)
-                    
-                    # 3. 刪除舊表
-                    cursor.execute("DROP TABLE electricity_calculation")
-                    
-                    # 4. 重命名新表
-                    cursor.execute("ALTER TABLE electricity_calculation_new RENAME TO electricity_calculation")
-                    
-                    logging.info("Migration completed successfully")
+                # 檢查表是否存在
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='electricity_calculation'")
+                if cursor.fetchone() is None:
+                    return  # 表不存在，init 會建立
                 
-                except Exception as e:
-                    logging.error(f"Migration error: {e}")
-                    raise
+                # 檢查欄位
+                cursor.execute("PRAGMA table_info(electricity_calculation)")
+                columns = [info[1] for info in cursor.fetchall()]
+                
+                if "public_kwh" not in columns:
+                    logging.warning("⚠️ 檢測到缺少 public_kwh 欄位，正在自動修復...")
+                    
+                    # 如果是舊名稱，改名
+                    if "public_allocated_kwh" in columns:
+                        cursor.execute("ALTER TABLE electricity_calculation RENAME COLUMN public_allocated_kwh TO public_kwh")
+                        logging.info("✅ 已將 public_allocated_kwh 重命名為 public_kwh")
+                    else:
+                        # 否則直接新增
+                        cursor.execute("ALTER TABLE electricity_calculation ADD COLUMN public_kwh INTEGER DEFAULT 0")
+                        logging.info("✅ 已新增 public_kwh 欄位")
+        
+        except Exception as e:
+            logging.error(f"Schema Fix Error: {e}")
 
     def room_exists(self, room: str) -> bool:
         try:
@@ -466,13 +428,11 @@ class RentalDB:
             return False
 
     def calculate_electricity_fee(self, period_id: int, calc: ElectricityCalculatorV10, meter_data: Dict) -> Tuple[bool, str, pd.DataFrame]:
-        """【第 4 步】計算應繳電費 - 修復版"""
-        
+        """【第 4 步】計算應繳電費"""
         try:
             results = []
-            
             with self._get_connection() as conn:
-                for room in SHARING_ROOMS:  # 只計算 2A~4D
+                for room in SHARING_ROOMS:
                     start, end = meter_data[room]
                     if end <= start:
                         continue
@@ -491,14 +451,13 @@ class RentalDB:
                         '應繳電費': f"${int(calculated_fee)}"
                     })
                     
-                    # 【修復】改用 public_kwh（原本是 public_allocated_kwh）
+                    # ✅ 使用正確的 public_kwh 欄位
                     conn.execute("""INSERT OR REPLACE INTO electricity_calculation(
                         period_id, room_number, private_kwh, public_kwh, total_kwh,
                         unit_price, calculated_fee)
                         VALUES(?, ?, ?, ?, ?, ?, ?)""",
                         (period_id, room, private_kwh, public_kwh, total_kwh, calc.unit_price, calculated_fee))
             
-            # 建立說明欄
             non_sharing_note = "本期記錄："
             for room, kwh in calc.non_sharing_records.items():
                 non_sharing_note += f"{room}房{kwh:.2f}度、"
@@ -506,13 +465,11 @@ class RentalDB:
             
             self.update_period_calculations(period_id, calc.unit_price, calc.public_kwh, calc.public_per_room, calc.tdy_total_kwh, calc.tdy_total_fee)
             
-            # 加入說明
             results_df = pd.DataFrame(results)
             if len(results_df) > 0:
                 results_df.loc[len(results_df)-1, '應繳電費'] = f"{results_df.loc[len(results_df)-1, '應繳電費']}\n\n{non_sharing_note}"
             
             return True, "✅ 電費計算完成", results_df
-        
         except Exception as e:
             logging.error(f"CALC Error: {e}", exc_info=True)
             return False, f"❌ 失敗: {str(e)}", pd.DataFrame()
@@ -575,7 +532,6 @@ def page_dashboard(db: RentalDB):
 
 def page_tenants(db: RentalDB):
     st.header("👥 房客管理")
-    
     if "edit_id" not in st.session_state:
         st.session_state.edit_id = None
     
@@ -594,7 +550,6 @@ def page_tenants(db: RentalDB):
                 base_rent = st.number_input("房租", value=6000)
                 start = st.date_input("租約開始")
                 end = st.date_input("租約結束", value=date.today() + timedelta(days=365))
-                
                 if st.form_submit_button("✅ 新增", type="primary"):
                     ok, msg = db.upsert_tenant(room, name, phone, deposit, base_rent, 
                                               start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
@@ -619,8 +574,7 @@ def page_tenants(db: RentalDB):
             st.info("暫無租客")
 
 def page_electricity(db: RentalDB):
-    st.header("💡 電費管理 (v10.0 修復版)")
-    
+    st.header("💡 電費管理 (v10.2)")
     if "current_period_id" not in st.session_state:
         st.session_state.current_period_id = None
 
@@ -632,7 +586,6 @@ def page_electricity(db: RentalDB):
             year = col1.number_input("年份", value=datetime.now().year)
             month_start = col2.number_input("開始月", value=1, min_value=1, max_value=12)
             month_end = col3.number_input("結束月", value=2, min_value=1, max_value=12)
-            
             if st.form_submit_button("✅ 新增期間", type="primary", use_container_width=True):
                 ok, msg, pid = db.add_electricity_period(year, month_start, month_end)
                 if ok:
@@ -663,7 +616,6 @@ def page_electricity(db: RentalDB):
             
             st.divider()
             st.markdown("### 📟 房間度數")
-            
             for floor_label, rooms in [("1F", ["1A", "1B"]), ("2F", ["2A", "2B"]), 
                                         ("3F", ["3A", "3B", "3C", "3D"]), ("4F", ["4A", "4B", "4C", "4D"])]:
                 st.markdown(f"**{floor_label}**")
@@ -678,13 +630,11 @@ def page_electricity(db: RentalDB):
 
             if st.form_submit_button("🚀 計算", type="primary", use_container_width=True):
                 calc = ElectricityCalculatorV10()
-                
                 tdy_data = {
                     "2F": (st.session_state.get("fee_2f", 0), st.session_state.get("kwh_2f", 0.0)),
                     "3F": (st.session_state.get("fee_3f", 0), st.session_state.get("kwh_3f", 0.0)),
                     "4F": (st.session_state.get("fee_4f", 0), st.session_state.get("kwh_4f", 0.0))
                 }
-                
                 meter_data = {}
                 for room in ALL_ROOMS:
                     start = st.session_state.get(f"start_{room}", 0.0)
@@ -697,8 +647,6 @@ def page_electricity(db: RentalDB):
                     st.error("❌ 台電單據驗證失敗")
                     st.stop()
                 
-                st.divider()
-                
                 if not calc.check_meter_readings(meter_data):
                     st.error("❌ 度數驗證失敗")
                     st.stop()
@@ -708,7 +656,6 @@ def page_electricity(db: RentalDB):
                 for room, (start, end) in meter_data.items():
                     if end > start:
                         db.add_meter_reading(st.session_state.current_period_id, room, start, end)
-                
                 for floor, (fee, kwh) in tdy_data.items():
                     if fee > 0 and kwh > 0:
                         db.add_tdy_bill(st.session_state.current_period_id, floor, kwh, fee)
@@ -738,18 +685,15 @@ def page_electricity(db: RentalDB):
 def page_expenses(db: RentalDB):
     st.header("💸 支出")
     col1, col2 = st.columns([1, 2])
-    
     with col1:
         with st.form("expense_form"):
             d = st.date_input("日期")
             cat = st.selectbox("類別", ["維修", "清潔", "其他"])
             amt = st.number_input("金額", min_value=0)
             desc = st.text_input("說明")
-            
             if st.form_submit_button("➕ 新增", type="primary", use_container_width=True):
                 if db.add_expense(d.strftime("%Y-%m-%d"), cat, amt, desc):
                     st.success("已記錄")
-    
     with col2:
         expenses = db.get_expenses(10)
         if not expenses.empty:
@@ -757,22 +701,36 @@ def page_expenses(db: RentalDB):
 
 def page_settings(db: RentalDB):
     st.header("⚙️ 設定")
-    st.markdown("✅ **v10.0 - 最終修復版本**")
-    st.markdown("• 自動數據庫遷移 - 相容舊版本")
+    st.markdown("✅ **v10.2 - Streamlit Cloud 專用修復版**")
+    st.markdown("• 啟動時自動修復資料庫欄位")
+    st.markdown("• 提供「強制重置」功能")
     st.markdown("• 1A、1B 只在說明欄記錄，不參與計算")
     st.markdown("• 2A~4D（10間）參與分攤")
-    st.markdown("• 完整的電費計算系統")
+    
+    st.divider()
+    st.subheader("🔴 危險區域")
+    st.warning("如果出現「table has no column」錯誤，請點擊下方按鈕重置整個系統。")
+    
+    if st.button("💥 重置整個系統 (刪除資料庫)", type="primary"):
+        ok, msg = db.reset_database()
+        if ok:
+            st.success(msg)
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.error(msg)
 
 # ============================================================================
 # 主程式
 # ============================================================================
 def main():
-    st.set_page_config(page_title="幸福之家 v10.0", page_icon="🏠", layout="wide")
+    st.set_page_config(page_title="幸福之家 v10.2", page_icon="🏠", layout="wide")
     
     with st.sidebar:
-        st.title("🏠 幸福之家 v10.0")
-        st.caption("自動遷移版本")
-        menu = st.radio("", ["📊 儀表板", "👥 房客", "💡 電費", "💸 支出", "⚙️ 設定"])
+        st.title("🏠 幸福之家 v10.2")
+        st.caption("Streamlit Cloud 專用修復版")
+        st.markdown("---")
+        menu = st.radio("導航", ["📊 儀表板", "👥 房客", "💡 電費", "💸 支出", "⚙️ 設定"])
     
     db = RentalDB()
     
