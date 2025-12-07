@@ -1,7 +1,7 @@
 """
-幸福之家管理系統 Pro v5.2 - 電費自動計算版
-【核心升級】: 根據Excel公式實現電費自動計算
-特性: 電費動態計算、度數追蹤、預繳管理、完整對帳
+幸福之家管理系統 Pro v5.3 - 多樓層電費計算版
+【核心升級】: 支持多張台電單據、靈活選擇分攤房間、精確公電分攤
+特性: 樓層獨立管理、自由選擇分攤、精確對帳、預繳追蹤
 """
 
 import streamlit as st
@@ -83,63 +83,74 @@ class RentalDB:
                 )
             """)
             
-            # 繳費表
+            # 計費期間表
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS payments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    room_number TEXT NOT NULL,
-                    payment_schedule TEXT NOT NULL,
-                    base_rent REAL DEFAULT 0,
-                    electricity_fee REAL DEFAULT 0,
-                    payment_amount REAL NOT NULL,
-                    due_date TEXT NOT NULL,
-                    payment_date TEXT NOT NULL,
-                    status TEXT DEFAULT '已收',
-                    notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            # 電費計費期間表
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS electricity_billing (
+                CREATE TABLE IF NOT EXISTS electricity_period (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     period_year INTEGER NOT NULL,
                     period_month_start INTEGER NOT NULL,
                     period_month_end INTEGER NOT NULL,
-                    tdy_total_kwh REAL NOT NULL,
-                    total_fee REAL NOT NULL,
-                    total_rooms INTEGER NOT NULL,
-                    avg_price_per_kwh REAL NOT NULL,
                     notes TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
-            # 電錶度數紀錄表
+            # 樓層台電單據表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS electricity_tdy_bill (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    period_id INTEGER NOT NULL,
+                    floor_name TEXT NOT NULL,
+                    tdy_total_kwh REAL NOT NULL,
+                    tdy_total_fee REAL NOT NULL,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(period_id) REFERENCES electricity_period(id),
+                    UNIQUE(period_id, floor_name)
+                )
+            """)
+            
+            # 電錶度數表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_meter (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    room_number TEXT NOT NULL,
                     period_id INTEGER NOT NULL,
+                    room_number TEXT NOT NULL,
                     meter_start_reading REAL NOT NULL,
                     meter_end_reading REAL NOT NULL,
                     meter_kwh_usage REAL NOT NULL,
                     notes TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(period_id) REFERENCES electricity_billing(id)
+                    FOREIGN KEY(period_id) REFERENCES electricity_period(id),
+                    UNIQUE(period_id, room_number)
                 )
             """)
             
-            # 電費計算記錄表
+            # 分攤房間配置表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS electricity_sharing_config (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    period_id INTEGER NOT NULL,
+                    room_number TEXT NOT NULL,
+                    is_sharing INTEGER DEFAULT 1,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(period_id) REFERENCES electricity_period(id),
+                    UNIQUE(period_id, room_number)
+                )
+            """)
+            
+            # 電費計算結果表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_calculation (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    room_number TEXT NOT NULL,
                     period_id INTEGER NOT NULL,
+                    room_number TEXT NOT NULL,
+                    floor_name TEXT,
                     private_kwh REAL NOT NULL,
                     allocated_kwh REAL NOT NULL,
                     total_kwh REAL NOT NULL,
+                    avg_price REAL NOT NULL,
                     calculated_fee REAL NOT NULL,
                     prepaid_balance REAL DEFAULT 0,
                     actual_payment REAL NOT NULL,
@@ -147,7 +158,7 @@ class RentalDB:
                     status TEXT DEFAULT '未收',
                     notes TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(period_id) REFERENCES electricity_billing(id)
+                    FOREIGN KEY(period_id) REFERENCES electricity_period(id)
                 )
             """)
             
@@ -158,8 +169,23 @@ class RentalDB:
                     room_number TEXT NOT NULL,
                     prepaid_amount REAL NOT NULL,
                     prepaid_date TEXT NOT NULL,
-                    deducted_amount REAL DEFAULT 0,
                     balance REAL NOT NULL,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 繳費記錄表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    room_number TEXT NOT NULL,
+                    payment_date TEXT NOT NULL,
+                    base_rent REAL DEFAULT 0,
+                    electricity_fee REAL DEFAULT 0,
+                    payment_amount REAL NOT NULL,
+                    payment_type TEXT,
+                    status TEXT DEFAULT '已收',
                     notes TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -181,9 +207,9 @@ class RentalDB:
             # 建立索引
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tenants_room ON tenants(room_number)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tenants_active ON tenants(is_active)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_elec_period ON electricity_billing(period_year, period_month_start)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_elec_period ON electricity_period(period_year, period_month_start)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_elec_bill_period ON electricity_tdy_bill(period_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_elec_meter_room ON electricity_meter(room_number)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_elec_calc_room ON electricity_calculation(room_number)")
 
     def upsert_tenant(self, room: str, name: str, phone: str, deposit: float,
                       base_rent: float, elec_fee: float, start: str, end: str,
@@ -268,24 +294,36 @@ class RentalDB:
 
     # ===== 電費管理函數 =====
     
-    def add_billing_period(self, year: int, month_start: int, month_end: int,
-                          tdy_kwh: float, total_fee: float, total_rooms: int,
-                          avg_price: float, notes: str = "") -> Tuple[bool, str, int]:
+    def add_electricity_period(self, year: int, month_start: int, month_end: int, notes: str = "") -> Tuple[bool, str, int]:
         """新增計費期間"""
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO electricity_billing(
-                        period_year, period_month_start, period_month_end,
-                        tdy_total_kwh, total_fee, total_rooms, avg_price_per_kwh, notes)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-                """, (year, month_start, month_end, tdy_kwh, total_fee, total_rooms, avg_price, notes))
+                    INSERT INTO electricity_period(period_year, period_month_start, period_month_end, notes)
+                    VALUES(?, ?, ?, ?)
+                """, (year, month_start, month_end, notes))
                 period_id = cursor.lastrowid
-            return True, "✅ 計費期間已新增", period_id
+            return True, f"✅ 計費期間 {year}年 {month_start}-{month_end}月 已新增", period_id
         except Exception as e:
-            logging.error(f"add_billing_period error: {e}")
+            logging.error(f"add_electricity_period error: {e}")
             return False, f"❌ 新增失敗: {str(e)}", 0
+
+    def add_tdy_bill(self, period_id: int, floor_name: str, tdy_kwh: float, tdy_fee: float, notes: str = "") -> Tuple[bool, str]:
+        """新增台電單據（按樓層）"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO electricity_tdy_bill(period_id, floor_name, tdy_total_kwh, tdy_total_fee, notes)
+                    VALUES(?, ?, ?, ?, ?)
+                """, (period_id, floor_name, tdy_kwh, tdy_fee, notes))
+            return True, f"✅ {floor_name} 台電單據已記錄"
+        except sqlite3.IntegrityError:
+            return False, f"❌ {floor_name} 已有單據，請先刪除或修改"
+        except Exception as e:
+            logging.error(f"add_tdy_bill error: {e}")
+            return False, f"❌ 記錄失敗: {str(e)}"
 
     def add_meter_reading(self, period_id: int, room: str, start: float, end: float, notes: str = "") -> Tuple[bool, str]:
         """新增電錶度數"""
@@ -294,113 +332,154 @@ class RentalDB:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO electricity_meter(
-                        period_id, room_number, meter_start_reading, meter_end_reading, meter_kwh_usage, notes)
+                    INSERT INTO electricity_meter(period_id, room_number, meter_start_reading, meter_end_reading, meter_kwh_usage, notes)
                     VALUES(?, ?, ?, ?, ?, ?)
                 """, (period_id, room, start, end, kwh_usage, notes))
             return True, f"✅ {room} 度數已記錄"
+        except sqlite3.IntegrityError:
+            return False, f"❌ {room} 已有度數，請先刪除或修改"
         except Exception as e:
             logging.error(f"add_meter_reading error: {e}")
             return False, f"❌ 記錄失敗: {str(e)}"
 
-    def calculate_electricity_fee(self, period_id: int) -> Tuple[bool, str, pd.DataFrame]:
-        """計算所有房間電費 - 核心計算函數"""
+    def set_sharing_config(self, period_id: int, room_number: str, is_sharing: int) -> bool:
+        """設定房間是否參與公電分攤"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO electricity_sharing_config(period_id, room_number, is_sharing)
+                    VALUES(?, ?, ?)
+                """, (period_id, room_number, is_sharing))
+            return True
+        except Exception as e:
+            logging.error(f"set_sharing_config error: {e}")
+            return False
+
+    def calculate_electricity_fee_v3(self, period_id: int) -> Tuple[bool, str, pd.DataFrame]:
+        """
+        v5.3 核心電費計算函數 - 支持多樓層、靈活選擇分攤
+        
+        計算邏輯：
+        1. 按樓層讀取台電單據
+        2. 讀取各房私表度數
+        3. 計算該樓層公電 = 台電度 - 私表度
+        4. 計算分攤戶數（只算is_sharing=1的房間）
+        5. 每戶分攤度數 = 公電 / 分攤戶數
+        6. 各房應繳 = (私表度 + 分攤度) × 該樓平均電價
+        """
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # 取得計費期間資訊
+                # 讀取所有台電單據
                 cursor.execute("""
-                    SELECT tdy_total_kwh, total_fee, total_rooms, avg_price_per_kwh
-                    FROM electricity_billing WHERE id=?
+                    SELECT floor_name, tdy_total_kwh, tdy_total_fee
+                    FROM electricity_tdy_bill WHERE period_id=?
                 """, (period_id,))
-                period = cursor.fetchone()
+                tdy_bills = cursor.fetchall()
                 
-                if not period:
-                    return False, "❌ 找不到計費期間", pd.DataFrame()
+                if not tdy_bills:
+                    return False, "❌ 尚未輸入台電單據", pd.DataFrame()
                 
-                tdy_total_kwh, total_fee, total_rooms, avg_price = period
-                
-                # 取得所有房間電錶度數
+                # 讀取所有電錶度數
                 cursor.execute("""
                     SELECT room_number, meter_kwh_usage
                     FROM electricity_meter WHERE period_id=?
                 """, (period_id,))
                 meters = cursor.fetchall()
                 
-                # 計算公電分攤
-                all_private_kwh = sum(m[1] for m in meters)
-                public_kwh = tdy_total_kwh - all_private_kwh
-                kwh_per_room = public_kwh / total_rooms if total_rooms > 0 else 0
+                if not meters:
+                    return False, "❌ 尚未輸入電錶度數", pd.DataFrame()
                 
-                # 計算每間電費並存入DB
+                # 獲取租客樓層資訊
+                cursor.execute("SELECT room_number FROM tenants WHERE is_active=1")
+                all_active_rooms = [r[0] for r in cursor.fetchall()]
+                
                 results = []
-                for room, private_kwh in meters:
-                    total_kwh = private_kwh + kwh_per_room
-                    calculated_fee = total_kwh * avg_price
+                
+                # 對每個樓層計算電費
+                for floor_name, tdy_kwh, tdy_fee in tdy_bills:
+                    # 該樓層的所有房間
+                    floor_rooms = [m for m in meters if m[0][0] == floor_name[0]]  # 按樓號匹配
                     
-                    # 檢查預繳餘額
-                    cursor.execute("""
-                        SELECT balance FROM electricity_prepaid 
-                        WHERE room_number=? ORDER BY created_at DESC LIMIT 1
-                    """, (room,))
-                    prepaid_row = cursor.fetchone()
-                    prepaid_balance = prepaid_row[0] if prepaid_row else 0
+                    if not floor_rooms:
+                        continue
                     
-                    actual_payment = max(0, calculated_fee - prepaid_balance)
+                    # 計算該樓層私表度數合計
+                    private_kwh_sum = sum(m[1] for m in floor_rooms)
                     
-                    # 存入計算記錄
-                    cursor.execute("""
-                        INSERT INTO electricity_calculation(
-                            room_number, period_id, private_kwh, allocated_kwh,
-                            total_kwh, calculated_fee, prepaid_balance, actual_payment)
-                        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (room, period_id, private_kwh, kwh_per_room, total_kwh,
-                          calculated_fee, prepaid_balance, actual_payment))
+                    # 計算公電度數
+                    public_kwh = tdy_kwh - private_kwh_sum
                     
-                    results.append({
-                        '房號': room,
-                        '私錶度': f"{private_kwh:.0f}",
-                        '分攤度': f"{kwh_per_room:.0f}",
-                        '合計度': f"{total_kwh:.0f}",
-                        '應繳費': f"${calculated_fee:.0f}",
-                        '預繳': f"${prepaid_balance:.0f}",
-                        '實收': f"${actual_payment:.0f}"
-                    })
+                    # 計算參與分攤的房間數
+                    sharing_rooms = []
+                    for room, _ in floor_rooms:
+                        cursor.execute("""
+                            SELECT is_sharing FROM electricity_sharing_config 
+                            WHERE period_id=? AND room_number=?
+                        """, (period_id, room))
+                        sharing_row = cursor.fetchone()
+                        is_sharing = sharing_row[0] if sharing_row else 1
+                        if is_sharing == 1:
+                            sharing_rooms.append(room)
+                    
+                    sharing_count = len(sharing_rooms) if sharing_rooms else len(floor_rooms)
+                    kwh_per_room = public_kwh / sharing_count if sharing_count > 0 else 0
+                    avg_price = tdy_fee / tdy_kwh if tdy_kwh > 0 else 0
+                    
+                    # 計算該樓層每房的電費
+                    for room, private_kwh in floor_rooms:
+                        # 檢查是否參與分攤
+                        cursor.execute("""
+                            SELECT is_sharing FROM electricity_sharing_config 
+                            WHERE period_id=? AND room_number=?
+                        """, (period_id, room))
+                        sharing_row = cursor.fetchone()
+                        is_sharing = sharing_row[0] if sharing_row else 1
+                        
+                        allocated_kwh = kwh_per_room if is_sharing == 1 else 0
+                        total_kwh = private_kwh + allocated_kwh
+                        calculated_fee = total_kwh * avg_price
+                        
+                        # 檢查預繳餘額
+                        cursor.execute("""
+                            SELECT balance FROM electricity_prepaid 
+                            WHERE room_number=? ORDER BY created_at DESC LIMIT 1
+                        """, (room,))
+                        prepaid_row = cursor.fetchone()
+                        prepaid_balance = prepaid_row[0] if prepaid_row else 0
+                        
+                        actual_payment = max(0, calculated_fee - prepaid_balance)
+                        
+                        # 存入計算記錄
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO electricity_calculation(
+                                period_id, room_number, floor_name, private_kwh, allocated_kwh,
+                                total_kwh, avg_price, calculated_fee, prepaid_balance, actual_payment)
+                            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (period_id, room, floor_name, private_kwh, allocated_kwh, total_kwh,
+                              avg_price, calculated_fee, prepaid_balance, actual_payment))
+                        
+                        results.append({
+                            '房號': room,
+                            '樓層': floor_name,
+                            '私錶度': f"{private_kwh:.0f}",
+                            '分攤度': f"{allocated_kwh:.0f}",
+                            '合計度': f"{total_kwh:.0f}",
+                            '電價': f"${avg_price:.2f}/度",
+                            '應繳費': f"${calculated_fee:.0f}",
+                            '預繳': f"${prepaid_balance:.0f}",
+                            '實收': f"${actual_payment:.0f}"
+                        })
                 
                 conn.commit()
                 df = pd.DataFrame(results)
                 return True, "✅ 電費計算完成", df
                 
         except Exception as e:
-            logging.error(f"calculate_electricity_fee error: {e}")
+            logging.error(f"calculate_electricity_fee_v3 error: {e}")
             return False, f"❌ 計算失敗: {str(e)}", pd.DataFrame()
-
-    def get_electricity_calculations(self, period_id: int) -> pd.DataFrame:
-        """獲取計費期間的電費計算結果"""
-        try:
-            with self._get_connection() as conn:
-                return pd.read_sql("""
-                    SELECT room_number, private_kwh, allocated_kwh, total_kwh,
-                           calculated_fee, prepaid_balance, actual_payment, status
-                    FROM electricity_calculation 
-                    WHERE period_id=? ORDER BY room_number
-                """, conn, params=(period_id,))
-        except:
-            return pd.DataFrame()
-
-    def record_electricity_payment(self, calc_id: int, payment_amount: float, payment_date: str) -> Tuple[bool, str]:
-        """記錄電費繳款"""
-        try:
-            with self._get_connection() as conn:
-                conn.execute("""
-                    UPDATE electricity_calculation 
-                    SET payment_date=?, status='已收' 
-                    WHERE id=?
-                """, (payment_date, calc_id))
-            return True, "✅ 電費已記錄"
-        except Exception as e:
-            return False, f"❌ 記錄失敗: {str(e)}"
 
     def add_electricity_prepaid(self, room: str, prepaid_amount: float, prepaid_date: str, notes: str = "") -> Tuple[bool, str]:
         """新增預繳電費"""
@@ -408,8 +487,7 @@ class RentalDB:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO electricity_prepaid(
-                        room_number, prepaid_amount, prepaid_date, balance, notes)
+                    INSERT INTO electricity_prepaid(room_number, prepaid_amount, prepaid_date, balance, notes)
                     VALUES(?, ?, ?, ?, ?)
                 """, (room, prepaid_amount, prepaid_date, prepaid_amount, notes))
             return True, f"✅ {room} 預繳電費已記錄"
@@ -491,7 +569,6 @@ def page_tenants(db: RentalDB):
     
     st.header("👥 房客管理")
     
-    # ===== 編輯模式 =====
     if st.session_state.edit_id is not None:
         tenant = db.get_tenant_by_id(st.session_state.edit_id)
         
@@ -574,7 +651,6 @@ def page_tenants(db: RentalDB):
                 st.session_state.edit_id = None
                 st.rerun()
     
-    # ===== 列表模式 =====
     else:
         col1, col2 = st.columns([4, 1])
         with col2:
@@ -584,7 +660,6 @@ def page_tenants(db: RentalDB):
         
         tenants = db.get_tenants()
         
-        # 新增模式
         if st.session_state.edit_id == -1:
             st.subheader("➕ 新增房客")
             
@@ -625,7 +700,6 @@ def page_tenants(db: RentalDB):
                         else:
                             st.error(msg)
         
-        # 列表
         else:
             if not tenants.empty:
                 st.subheader("現有房客")
@@ -652,72 +726,98 @@ def page_tenants(db: RentalDB):
                 st.info("尚無房客")
 
 def page_electricity(db: RentalDB):
-    """💡 電費管理 - 新頁面"""
-    st.header("💡 電費管理")
+    """💡 電費管理 v5.3 - 多樓層版"""
+    st.header("💡 電費管理 v5.3")
+    st.info("✨ 新功能：支持多樓層台電單據、靈活選擇分攤房間、精確公電分攤")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["新增帳單", "輸入度數", "計算結果", "預繳管理"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["新增期間", "輸入台電單據", "輸入度數", "設定分攤", "計算結果"])
     
-    # ===== Tab 1: 新增帳單 =====
+    # ===== Tab 1: 新增期間 =====
     with tab1:
-        st.subheader("台電帳單資訊")
-        col1, col2 = st.columns(2)
+        st.subheader("第1步：新增計費期間")
         
+        col1, col2, col3 = st.columns(3)
         with col1:
             year = st.number_input("年份", value=datetime.now().year, min_value=2020)
+        with col2:
             month_start = st.number_input("開始月份", value=1, min_value=1, max_value=12)
-        
-        with col2:
+        with col3:
             month_end = st.number_input("結束月份", value=2, min_value=1, max_value=12)
-            total_rooms = st.number_input("房間總數", value=12, min_value=1)
         
-        col1, col2 = st.columns(2)
-        with col1:
-            tdy_kwh = st.number_input("台電總度數", value=0, min_value=0, step=1)
-            total_fee = st.number_input("台電總費用", value=0, min_value=0, step=100)
+        notes = st.text_input("備註 (如: 夏季電費)")
         
-        with col2:
-            avg_price = st.number_input("平均電價(元/度)", value=2.12, min_value=1.0, step=0.01)
-        
-        notes = st.text_input("備註")
-        
-        if st.button("✅ 新增帳單", type="primary", use_container_width=True):
-            ok, msg, period_id = db.add_billing_period(year, month_start, month_end, tdy_kwh, total_fee, total_rooms, avg_price, notes)
+        if st.button("✅ 新增期間", type="primary", use_container_width=True):
+            ok, msg, period_id = db.add_electricity_period(year, month_start, month_end, notes)
             if ok:
                 st.success(msg)
                 st.session_state.current_period_id = period_id
                 st.rerun()
             else:
                 st.error(msg)
-    
-    # ===== Tab 2: 輸入度數 =====
-    with tab2:
-        st.subheader("輸入各房間電錶度數")
         
-        tenants = db.get_tenants()
-        if tenants.empty:
-            st.error("請先新增房客")
-            return
+        if "current_period_id" in st.session_state:
+            st.info(f"📌 目前計費期間 ID: {st.session_state.current_period_id}")
+    
+    # ===== Tab 2: 輸入台電單據 =====
+    with tab2:
+        st.subheader("第2步：輸入各樓層台電單據")
         
         if "current_period_id" not in st.session_state:
-            st.warning("請先新增計費期間")
+            st.warning("❌ 請先新增計費期間")
             return
         
         period_id = st.session_state.current_period_id
         
-        st.info(f"📌 計費期間 ID: {period_id}")
+        st.info("💡 提示：根據你的電費表，分別輸入 2F、3F、4F 的台電單據")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            floor_name = st.selectbox("樓層", ["2F", "3F", "4F"])
+            tdy_kwh = st.number_input("台電總度數", value=0, min_value=0, step=1)
+        
+        with col2:
+            tdy_fee = st.number_input("台電總費用", value=0, min_value=0, step=100)
+            tdy_notes = st.text_input("備註")
+        
+        if st.button(f"📝 記錄 {floor_name} 單據", type="primary", use_container_width=True):
+            if tdy_kwh <= 0 or tdy_fee <= 0:
+                st.error("❌ 度數和費用必須大於 0")
+            else:
+                ok, msg = db.add_tdy_bill(period_id, floor_name, tdy_kwh, tdy_fee, tdy_notes)
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+    
+    # ===== Tab 3: 輸入度數 =====
+    with tab3:
+        st.subheader("第3步：輸入各房間電錶度數")
+        
+        if "current_period_id" not in st.session_state:
+            st.warning("❌ 請先新增計費期間")
+            return
+        
+        period_id = st.session_state.current_period_id
+        tenants = db.get_tenants()
+        
+        if tenants.empty:
+            st.error("❌ 請先新增房客")
+            return
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            room = st.selectbox("選擇房號", tenants['room_number'].tolist())
+            room = st.selectbox("房號", tenants['room_number'].tolist())
         with col2:
-            start_reading = st.number_input("上期度數", value=0, step=1)
+            start_reading = st.number_input("上期度數", value=0, min_value=0, step=1)
         with col3:
-            end_reading = st.number_input("本期度數", value=0, step=1)
+            end_reading = st.number_input("本期度數", value=0, min_value=0, step=1)
         
         meter_notes = st.text_input("備註")
         
-        if st.button("📝 記錄度數", type="primary", use_container_width=True):
+        if st.button("📊 記錄度數", type="primary", use_container_width=True):
             if start_reading >= end_reading:
                 st.error("❌ 本期度數必須大於上期度數")
             else:
@@ -728,51 +828,64 @@ def page_electricity(db: RentalDB):
                 else:
                     st.error(msg)
     
-    # ===== Tab 3: 計算結果 =====
-    with tab3:
-        st.subheader("電費計算結果")
+    # ===== Tab 4: 設定分攤 =====
+    with tab4:
+        st.subheader("第4步：設定房間分攤方式")
         
         if "current_period_id" not in st.session_state:
-            st.warning("請先完成帳單和度數輸入")
+            st.warning("❌ 請先新增計費期間")
+            return
+        
+        period_id = st.session_state.current_period_id
+        tenants = db.get_tenants()
+        
+        if tenants.empty:
+            st.error("❌ 請先新增房客")
+            return
+        
+        st.info("💡 提示：1A、1B 通常自行繳納，不參與公電分攤。請勾選下方參與分攤的房間。")
+        
+        sharing_config = {}
+        cols = st.columns(4)
+        for idx, room in enumerate(tenants['room_number'].tolist()):
+            with cols[idx % 4]:
+                sharing_config[room] = st.checkbox(f"{room} 參與分攤", value=(room not in ["1A", "1B"]))
+        
+        if st.button("💾 保存分攤設定", type="primary", use_container_width=True):
+            for room, is_sharing in sharing_config.items():
+                db.set_sharing_config(period_id, room, 1 if is_sharing else 0)
+            st.success("✅ 分攤設定已保存")
+            st.rerun()
+    
+    # ===== Tab 5: 計算結果 =====
+    with tab5:
+        st.subheader("第5步：計算電費結果")
+        
+        if "current_period_id" not in st.session_state:
+            st.warning("❌ 請先完成前面所有步驟")
             return
         
         period_id = st.session_state.current_period_id
         
-        col1, col2 = st.columns([3, 1])
-        with col2:
-            if st.button("🔄 計算", type="primary", use_container_width=True):
-                ok, msg, result_df = db.calculate_electricity_fee(period_id)
-                if ok:
-                    st.session_state.last_calculation = result_df
-                    st.success(msg)
-                else:
-                    st.error(msg)
+        if st.button("🔄 開始計算", type="primary", use_container_width=True):
+            ok, msg, result_df = db.calculate_electricity_fee_v3(period_id)
+            if ok:
+                st.session_state.last_calculation = result_df
+                st.success(msg)
+            else:
+                st.error(msg)
         
         if "last_calculation" in st.session_state:
             st.dataframe(st.session_state.last_calculation, use_container_width=True, hide_index=True)
-    
-    # ===== Tab 4: 預繳管理 =====
-    with tab4:
-        st.subheader("電費預繳管理")
-        
-        tenants = db.get_tenants()
-        
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            room = st.selectbox("房號", tenants['room_number'].tolist(), key="prepaid_room")
-        with col2:
-            prepaid_amount = st.number_input("預繳金額", value=0, min_value=0, step=100)
-        
-        prepaid_notes = st.text_input("備註 (如：預繳電費)")
-        
-        if st.button("💰 新增預繳", type="primary", use_container_width=True):
-            today = datetime.now().strftime("%Y-%m-%d")
-            ok, msg = db.add_electricity_prepaid(room, prepaid_amount, today, prepaid_notes)
-            if ok:
-                st.success(msg)
-                st.rerun()
-            else:
-                st.error(msg)
+            
+            st.divider()
+            st.subheader("📊 統計資訊")
+            
+            # 提取數字進行統計
+            df = st.session_state.last_calculation
+            total_rooms = len(df)
+            
+            st.write(f"✅ 共計 {total_rooms} 間房間")
 
 def page_expenses(db: RentalDB):
     """支出管理"""
@@ -812,30 +925,29 @@ def page_settings():
     
     with col1:
         st.info("""
-        **幸福之家管理系統 Pro v5.2**
+        **幸福之家管理系統 Pro v5.3**
         
         ✨ 核心特性
-        • 房客管理 (編輯完全修復)
+        • 房客管理（編輯修復）
         • 租金收繳管理
-        • 電費動態計算 ⭐
-        • 度數追蹤管理 ⭐
-        • 預繳電費管理 ⭐
+        • 多樓層電費管理 ⭐
+        • 靈活分攤設定 ⭐
+        • 精確公電計算 ⭐
         • 支出記帳
         
-        **版本:** v5.2
+        **版本:** v5.3
         **日期:** 2025-12-07
-        **新增:** 自動電費計算模組
+        **新增:** 多樓層電費計算
         """)
     
     with col2:
         st.success("""
-        ✅ 編輯房客 (完全正常)
-        ✅ 保存無誤
-        ✅ 資料不混亂
-        ✅ 自動DB修復
-        ✅ 電費公式計算
-        ✅ 度數管理
-        ✅ 預繳追蹤
+        ✅ 支持多張台電單據
+        ✅ 按樓層獨立管理
+        ✅ 靈活選擇分攤房間
+        ✅ 精確公電分攤計算
+        ✅ 完整預繳追蹤
+        ✅ 電費自動對帳
         ✅ 完整日誌記錄
         """)
 
@@ -861,7 +973,7 @@ def main():
     
     with st.sidebar:
         st.title("🏠 幸福之家")
-        st.caption("智慧租房管理系統 v5.2")
+        st.caption("智慧租房管理系統 v5.3")
         
         menu = st.radio("導航", [
             "📊 儀表板",
