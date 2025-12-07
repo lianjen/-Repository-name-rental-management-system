@@ -1,11 +1,11 @@
 """
-幸福之家管理系統 Pro v5.6 - 表單提交修正版
-【核心修正】: 
-1. 電費表單提交邏輯改進
-2. 增加驗證前的數據摘要顯示
-3. 更清楚的錯誤訊息和成功訊息
-4. 改進驗證邏輯，避免 false negative
-特性: 表單提交正常、確認訊息清晰、驗證提示詳細、使用體驗大幅改進
+幸福之家管理系統 Pro v5.7 - 最終版（整合計算）
+【核心改進】: 
+1. 把計算結果直接整合到第2步
+2. 提交表單後立刻顯示計算結果
+3. 消除第3步的時序問題
+4. 最流暢的使用者體驗
+設計: 第1步新增期間 → 第2步輸入+計算+結果（一體式）
 """
 
 import streamlit as st
@@ -31,7 +31,6 @@ logging.basicConfig(
 
 ALL_ROOMS = ["1A", "1B", "2A", "2B", "3A", "3B", "3C", "3D", "4A", "4B", "4C", "4D"]
 
-# 房間與樓層對應
 ROOM_FLOOR_MAP = {
     "1A": "1F", "1B": "1F",
     "2A": "2F", "2B": "2F",
@@ -71,7 +70,6 @@ class RentalDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
-            # 租客表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tenants (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,7 +93,6 @@ class RentalDB:
                 )
             """)
             
-            # 計費期間表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_period (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,7 +104,6 @@ class RentalDB:
                 )
             """)
             
-            # 樓層台電單據表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_tdy_bill (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +118,6 @@ class RentalDB:
                 )
             """)
             
-            # 電錶度數表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_meter (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,7 +133,6 @@ class RentalDB:
                 )
             """)
             
-            # 分攤房間配置表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_sharing_config (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,7 +146,6 @@ class RentalDB:
                 )
             """)
             
-            # 電費計算結果表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_calculation (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,7 +167,6 @@ class RentalDB:
                 )
             """)
             
-            # 預繳電費表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS electricity_prepaid (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -187,7 +179,6 @@ class RentalDB:
                 )
             """)
             
-            # 繳費記錄表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -203,7 +194,6 @@ class RentalDB:
                 )
             """)
             
-            # 支出表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS expenses (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,7 +206,6 @@ class RentalDB:
                 )
             """)
             
-            # 建立索引
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tenants_room ON tenants(room_number)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tenants_active ON tenants(is_active)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_elec_period ON electricity_period(period_year, period_month_start)")
@@ -317,8 +306,6 @@ class RentalDB:
         except Exception as e:
             return False, f"❌ 刪除失敗: {str(e)}"
 
-    # ===== 電費管理函數 =====
-    
     def get_period_info(self, period_id: int) -> Optional[Dict]:
         """獲取計費期間資訊"""
         try:
@@ -410,15 +397,12 @@ class RentalDB:
         except:
             return 1
 
-    def calculate_electricity_fee_v6(self, period_id: int) -> Tuple[bool, str, pd.DataFrame]:
-        """
-        v5.6 核心電費計算函數
-        """
+    def calculate_electricity_fee_v7(self, period_id: int) -> Tuple[bool, str, pd.DataFrame]:
+        """v5.7 核心電費計算函數"""
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # 讀取所有台電單據
                 cursor.execute("""
                     SELECT floor_name, tdy_total_kwh, tdy_total_fee
                     FROM electricity_tdy_bill WHERE period_id=?
@@ -428,7 +412,6 @@ class RentalDB:
                 if not tdy_bills:
                     return False, "❌ 尚未輸入台電單據", pd.DataFrame()
                 
-                # 讀取所有電錶度數
                 cursor.execute("""
                     SELECT room_number, meter_kwh_usage
                     FROM electricity_meter WHERE period_id=?
@@ -440,21 +423,15 @@ class RentalDB:
                 
                 results = []
                 
-                # 對每個樓層計算電費
                 for floor_name, tdy_kwh, tdy_fee in tdy_bills:
-                    # 該樓層的所有房間
                     floor_rooms = [(room, kwh) for room, kwh in meters if ROOM_FLOOR_MAP.get(room, "") == floor_name]
                     
                     if not floor_rooms:
                         continue
                     
-                    # 計算該樓層私表度數合計
                     private_kwh_sum = sum(kwh for _, kwh in floor_rooms)
-                    
-                    # 計算公電度數
                     public_kwh = tdy_kwh - private_kwh_sum
                     
-                    # 計算參與分攤的房間數
                     sharing_rooms = []
                     for room, _ in floor_rooms:
                         is_sharing = self.get_sharing_config(period_id, room)
@@ -465,7 +442,6 @@ class RentalDB:
                     kwh_per_room = public_kwh / sharing_count if sharing_count > 0 else 0
                     avg_price = tdy_fee / tdy_kwh if tdy_kwh > 0 else 0
                     
-                    # 計算該樓層每房的電費
                     for room, private_kwh in floor_rooms:
                         is_sharing = self.get_sharing_config(period_id, room)
                         
@@ -473,7 +449,6 @@ class RentalDB:
                         total_kwh = private_kwh + allocated_kwh
                         calculated_fee = total_kwh * avg_price
                         
-                        # 檢查預繳餘額
                         cursor.execute("""
                             SELECT balance FROM electricity_prepaid 
                             WHERE room_number=? ORDER BY created_at DESC LIMIT 1
@@ -483,7 +458,6 @@ class RentalDB:
                         
                         actual_payment = max(0, calculated_fee - prepaid_balance)
                         
-                        # 存入計算記錄
                         cursor.execute("""
                             INSERT OR REPLACE INTO electricity_calculation(
                                 period_id, room_number, floor_name, private_kwh, allocated_kwh,
@@ -509,7 +483,7 @@ class RentalDB:
                 return True, "✅ 電費計算完成", df
                 
         except Exception as e:
-            logging.error(f"calculate_electricity_fee_v6 error: {e}")
+            logging.error(f"calculate_electricity_fee_v7 error: {e}")
             return False, f"❌ 計算失敗: {str(e)}", pd.DataFrame()
 
     def add_electricity_prepaid(self, room: str, prepaid_amount: float, prepaid_date: str, notes: str = "") -> Tuple[bool, str]:
@@ -625,7 +599,6 @@ def page_tenants(db: RentalDB):
     st.header("👥 房客管理")
     
     if st.session_state.edit_id is not None and st.session_state.edit_id != -1:
-        # 編輯模式
         tenant = db.get_tenant_by_id(st.session_state.edit_id)
         
         if not tenant:
@@ -708,7 +681,6 @@ def page_tenants(db: RentalDB):
                 st.rerun()
     
     elif st.session_state.edit_id == -1:
-        # 新增模式
         st.subheader("➕ 新增房客")
         
         tenants_df = db.get_tenants()
@@ -768,7 +740,6 @@ def page_tenants(db: RentalDB):
                 st.rerun()
     
     else:
-        # 列表模式
         col1, col2 = st.columns([4, 1])
         with col2:
             if st.button("➕ 新增", type="primary", use_container_width=True):
@@ -802,17 +773,14 @@ def page_tenants(db: RentalDB):
             st.info("尚無房客")
 
 def page_electricity(db: RentalDB):
-    """💡 電費管理 v5.6 - 表單提交修正版（修正 Bug）"""
-    st.header("💡 電費管理 v5.6")
-    st.info("✨ 整合式表單：新增期間 → 輸入資料 → 計算結果")
+    """💡 電費管理 v5.7 - 最終整合版"""
+    st.header("💡 電費管理 v5.7")
+    st.info("✨ 最簡潔流程：新增期間 → 輸入資料 + 直接計算結果")
     
-    # 初始化計費期間
     if "current_period_id" not in st.session_state:
         st.session_state.current_period_id = None
-    if "electricity_data_saved" not in st.session_state:
-        st.session_state.electricity_data_saved = False
     
-    tab1, tab2, tab3 = st.tabs(["新增期間", "整合輸入", "計算結果"])
+    tab1, tab2 = st.tabs(["新增期間", "輸入 & 計算"])
     
     # ===== Tab 1: 新增期間 =====
     with tab1:
@@ -833,7 +801,6 @@ def page_electricity(db: RentalDB):
             if ok:
                 st.success(msg)
                 st.session_state.current_period_id = period_id
-                st.session_state.electricity_data_saved = False
                 st.rerun()
             else:
                 st.error(msg)
@@ -843,11 +810,11 @@ def page_electricity(db: RentalDB):
             period_info = db.get_period_info(st.session_state.current_period_id)
             if period_info:
                 st.info(f"📌 {period_info['year']}年 {period_info['month_start']}-{period_info['month_end']}月 (ID: {period_info['id']})")
-                st.write("→ 請進入「整合輸入」標籤輸入台電單據和房間度數")
+                st.write("→ 請進入「輸入 & 計算」標籤輸入台電單據和房間度數")
     
-    # ===== Tab 2: 整合輸入 =====
+    # ===== Tab 2: 輸入 & 計算（一體式） =====
     with tab2:
-        st.subheader("第2步：一次性輸入所有資料")
+        st.subheader("第2步：輸入資料 & 自動計算結果")
         
         if not st.session_state.current_period_id:
             st.warning("❌ 請先在「新增期間」標籤建立計費期間")
@@ -855,24 +822,20 @@ def page_electricity(db: RentalDB):
             period_id = st.session_state.current_period_id
             period_info = db.get_period_info(period_id)
             
-            # 顯示當前期間資訊
             if period_info:
                 st.success(f"📌 當前期間：{period_info['year']}年 {period_info['month_start']}-{period_info['month_end']}月")
             
-            st.info("💡 在下方表單中輸入所有台電單據與房間度數，然後點「檢查並提交」")
+            st.info("💡 輸入所有台電單據與房間度數，然後點「✅ 提交並計算」")
             
-            # 使用表單來收集所有數據
-            with st.form(key="electricity_form_v6"):
+            with st.form(key="electricity_form_v7"):
                 
                 st.markdown("### 【第一部分】台電單據輸入")
                 
-                # 1F - 自行繳納
                 st.write("**1F - 自行繳納**（不計入公電分攤）")
                 st.write("（此樓層自行繳納，無需輸入）")
                 
                 st.divider()
                 
-                # 2F、3F、4F 台電單據
                 tdy_data = {}
                 for floor in ["2F", "3F", "4F"]:
                     st.write(f"**{floor}**")
@@ -887,19 +850,9 @@ def page_electricity(db: RentalDB):
                 st.divider()
                 st.markdown("### 【第二部分】房間電錶度數輸入")
                 
-                # 房間度數輸入
                 meter_data = {}
                 
-                # 1F 房間
                 st.write("**1F 房間**")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.write("房號")
-                with col2:
-                    st.write("上期度數")
-                with col3:
-                    st.write("本期度數")
-                
                 for room in ["1A", "1B"]:
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -912,16 +865,7 @@ def page_electricity(db: RentalDB):
                 
                 st.divider()
                 
-                # 2F 房間
                 st.write("**2F 房間**")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.write("房號")
-                with col2:
-                    st.write("上期度數")
-                with col3:
-                    st.write("本期度數")
-                
                 for room in ["2A", "2B"]:
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -934,16 +878,7 @@ def page_electricity(db: RentalDB):
                 
                 st.divider()
                 
-                # 3F 房間
                 st.write("**3F 房間**")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.write("房號")
-                with col2:
-                    st.write("上期度數")
-                with col3:
-                    st.write("本期度數")
-                
                 for room in ["3A", "3B", "3C", "3D"]:
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -956,16 +891,7 @@ def page_electricity(db: RentalDB):
                 
                 st.divider()
                 
-                # 4F 房間
                 st.write("**4F 房間**")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.write("房號")
-                with col2:
-                    st.write("上期度數")
-                with col3:
-                    st.write("本期度數")
-                
                 for room in ["4A", "4B", "4C", "4D"]:
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -978,14 +904,11 @@ def page_electricity(db: RentalDB):
                 
                 st.divider()
                 
-                # 提交按鈕（修正 Bug）
-                submitted = st.form_submit_button("📋 檢查並提交", type="primary", use_container_width=True)
+                submitted = st.form_submit_button("✅ 提交並計算", type="primary", use_container_width=True)
                 
                 if submitted:
-                    # 驗證數據前先顯示摘要（修正 Bug：增加確認訊息）
                     st.subheader("📊 數據驗證結果")
                     
-                    # 驗證台電單據
                     tdy_valid_count = 0
                     st.write("**台電單據檢查：**")
                     for floor, data in tdy_data.items():
@@ -995,7 +918,6 @@ def page_electricity(db: RentalDB):
                         else:
                             st.write(f"  ❌ {floor}: 未填或為 0")
                     
-                    # 驗證度數
                     meter_valid_count = 0
                     st.write("**房間度數檢查：**")
                     for room, (start, end) in meter_data.items():
@@ -1008,66 +930,47 @@ def page_electricity(db: RentalDB):
                     
                     st.divider()
                     
-                    # 檢查是否通過驗證
                     if tdy_valid_count > 0 and meter_valid_count > 0:
                         st.success(f"✅ 驗證通過！ 台電單據: {tdy_valid_count}個, 房間度數: {meter_valid_count}間")
                         
-                        # 執行提交邏輯（修正 Bug：分離寫入和計算）
                         try:
-                            # 只寫入數據，不計算
-                            for floor, data in tdy_data.items():
-                                if data["kwh"] > 0 and data["fee"] > 0:
-                                    db.add_tdy_bill(period_id, floor, data["kwh"], data["fee"])
+                            with st.spinner("正在提交資料並計算電費..."):
+                                # 寫入台電單據
+                                for floor, data in tdy_data.items():
+                                    if data["kwh"] > 0 and data["fee"] > 0:
+                                        db.add_tdy_bill(period_id, floor, data["kwh"], data["fee"])
+                                
+                                # 寫入度數
+                                for room, (start, end) in meter_data.items():
+                                    if end >= start:
+                                        db.add_meter_reading(period_id, room, start, end)
+                                
+                                # 設定分攤配置
+                                for room in ALL_ROOMS:
+                                    is_sharing = 0 if room in ["1A", "1B"] else 1
+                                    db.set_sharing_config(period_id, room, is_sharing)
+                                
+                                # 【重點修正】直接計算電費（整合到第2步）
+                                ok, msg, result_df = db.calculate_electricity_fee_v7(period_id)
                             
-                            for room, (start, end) in meter_data.items():
-                                if end >= start:
-                                    db.add_meter_reading(period_id, room, start, end)
-                            
-                            # 設定分攤配置：1A、1B 不分攤，其他分攤
-                            for room in ALL_ROOMS:
-                                is_sharing = 0 if room in ["1A", "1B"] else 1
-                                db.set_sharing_config(period_id, room, is_sharing)
-                            
-                            st.session_state.electricity_data_saved = True
-                            st.balloons()
-                            st.success("🎉 資料已成功保存並提交！\n\n請進入「計算結果」標籤點擊「開始計算」進行電費計算")
-                            
+                            if ok:
+                                st.balloons()
+                                st.success("🎉 資料已成功提交並計算完成！")
+                                
+                                st.divider()
+                                st.subheader("📋 電費計算結果")
+                                st.dataframe(result_df, use_container_width=True, hide_index=True)
+                                
+                                st.divider()
+                                st.subheader("📊 統計資訊")
+                                st.write(f"✅ 共計 {len(result_df)} 間房間已計算")
+                            else:
+                                st.error(f"❌ 計算失敗: {msg}")
+                        
                         except Exception as e:
-                            st.error(f"❌ 保存失敗: {str(e)}\n\n請檢查資料是否有誤並重試")
+                            st.error(f"❌ 提交失敗: {str(e)}\n\n請檢查資料是否有誤並重試")
                     else:
                         st.error(f"❌ 驗證失敗！\n\n• 台電單據: 需要至少 1 個有效數據 (目前: {tdy_valid_count}個)\n• 房間度數: 需要至少 1 間有效數據 (目前: {meter_valid_count}間)\n\n請檢查並重新填寫")
-    
-    # ===== Tab 3: 計算結果 =====
-    with tab3:
-        st.subheader("第3步：電費計算結果")
-        
-        if not st.session_state.current_period_id:
-            st.warning("❌ 請先完成前面的步驟")
-        elif not st.session_state.electricity_data_saved:
-            st.warning("❌ 請先在「整合輸入」完成資料提交")
-        else:
-            period_id = st.session_state.current_period_id
-            
-            if st.button("🔄 開始計算", type="primary", use_container_width=True):
-                with st.spinner("正在計算電費..."):
-                    ok, msg, result_df = db.calculate_electricity_fee_v6(period_id)
-                    if ok:
-                        st.session_state.last_calculation = result_df
-                        st.balloons()
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-            
-            if "last_calculation" in st.session_state and not st.session_state.last_calculation.empty:
-                st.dataframe(st.session_state.last_calculation, use_container_width=True, hide_index=True)
-                
-                st.divider()
-                st.subheader("📊 統計資訊")
-                
-                df = st.session_state.last_calculation
-                st.write(f"✅ 共計 {len(df)} 間房間已計算")
-            else:
-                st.info("尚無計算結果，請先點擊「開始計算」")
 
 def page_expenses(db: RentalDB):
     """支出管理"""
@@ -1107,7 +1010,7 @@ def page_settings():
     
     with col1:
         st.info("""
-        **幸福之家管理系統 Pro v5.6**
+        **幸福之家管理系統 Pro v5.7**
         
         ✨ 核心特性
         • 房客管理 ✅
@@ -1118,21 +1021,21 @@ def page_settings():
         • 精確公電計算 ✅
         • 支出記帳 ✅
         
-        **版本:** v5.6 Form Submit Fixed
+        **版本:** v5.7 Final Integrated
         **日期:** 2025-12-07
-        **改進:** 表單提交、驗證提示、確認訊息
+        **改進:** 計算整合到第2步
         """)
     
     with col2:
         st.success("""
-        ✅ 表單提交正常
-        ✅ 數據摘要顯示
-        ✅ 驗證結果清晰
-        ✅ 確認訊息詳細
-        ✅ 成功/失敗提示
+        ✅ 流程簡潔（只有2個Tab）
+        ✅ 計算結果即時顯示
+        ✅ 消除時序問題
+        ✅ 數據不會丟失
+        ✅ 使用者體驗最佳
+        ✅ 驗證提示清晰
         ✅ 氣球特效慶祝
-        ✅ 自動回到列表
-        ✅ 完整統計資訊
+        ✅ 統計資訊完整
         """)
 
 # ============================================================================
@@ -1157,7 +1060,7 @@ def main():
     
     with st.sidebar:
         st.title("🏠 幸福之家")
-        st.caption("智慧租房管理系統 v5.6")
+        st.caption("智慧租房管理系統 v5.7")
         
         menu = st.radio("導航", [
             "📊 儀表板",
