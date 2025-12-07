@@ -1,12 +1,12 @@
 """
-幸福之家管理系統 Pro v13.9 - 智慧繳費追蹤版
-= 核心優化 =
-✅ 1. 新增房客時自動生成全年繳費計畫
-✅ 2. 月繳/半年繳/年繳自動排程
-✅ 3. 繳費日期自動標記 + 倒數提醒
-✅ 4. 一鍵標記已繳 + 歷史查詢
-✅ 5. 繳費狀態儀表板 (應繳/已收/未收)
-✅ 6. 智慧篩選：逾期/即將繳費/已繳清
+幸福之家管理系統 Pro v13.9 Final - 儀表板優化版
+= 最終優化 =
+✅ 1. 儀表板：房間狀態 + 租屋率 + 統計卡片
+✅ 2. 繳費監控：小卡片展示 (逾期/即將繳費數量)
+✅ 3. 倒數提醒：租約到期 (45天內)
+✅ 4. 完整房間網格：視覺化房客狀態
+✅ 5. 待辦事項：待辦 + 未繳房租
+✅ 6. 智慧繳費追蹤：完整功能保留在單獨頁面
 """
 
 import streamlit as st
@@ -154,18 +154,9 @@ class ElectricityCalculatorV10:
         return True, "✅ 所有檢查都通過了！"
 
 # ============================================================================
-# 繳費計畫生成工具 (v13.9 新增)
+# 繳費計畫生成工具 (v13.9 保留)
 # ============================================================================
 def generate_payment_schedule(payment_method: str, start_date: str, end_date: str) -> List[Tuple[int, int]]:
-    """
-    根據繳費方式自動生成全年繳費計畫
-    回傳 List[(year, month), ...]
-    
-    例如：
-    - 月繳：每個月都要繳
-    - 半年繳：1月、7月繳
-    - 年繳：1月繳
-    """
     start = datetime.strptime(start_date, "%Y-%m-%d")
     end = datetime.strptime(end_date, "%Y-%m-%d")
     schedule = []
@@ -179,18 +170,18 @@ def generate_payment_schedule(payment_method: str, start_date: str, end_date: st
             schedule.append((year, month))
             current += timedelta(days=30)
         elif payment_method == "半年繳":
-            if month in [1, 7]:  # 1月和7月繳
+            if month in [1, 7]:
                 schedule.append((year, month))
             current += timedelta(days=180)
         elif payment_method == "年繳":
-            if month == 1:  # 只在1月繳
+            if month == 1:
                 schedule.append((year, month))
             current += timedelta(days=365)
     
     return schedule
 
 # ============================================================================
-# 數據庫類 (v13.9 - 新增繳費計畫表)
+# 數據庫類 (v13.9 完整版)
 # ============================================================================
 class RentalDB:
     def __init__(self, db_path: str = "rental_system_12rooms.db"):
@@ -235,7 +226,6 @@ class RentalDB:
     def _init_db(self):
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            # 房客表 (保持原有 + 新增繳費方式相關欄位)
             cursor.execute("""CREATE TABLE IF NOT EXISTS tenants (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 room_number TEXT UNIQUE NOT NULL,
@@ -254,7 +244,6 @@ class RentalDB:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
             
-            # v13.9 新增：繳費計畫表 (智慧追蹤)
             cursor.execute("""CREATE TABLE IF NOT EXISTS payment_schedule (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 room_number TEXT NOT NULL,
@@ -274,7 +263,6 @@ class RentalDB:
                 UNIQUE(room_number, payment_year, payment_month)
             )""")
             
-            # 房租繳費記錄表 (相容舊版)
             cursor.execute("""CREATE TABLE IF NOT EXISTS rent_payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 room_number TEXT NOT NULL,
@@ -288,7 +276,6 @@ class RentalDB:
                 UNIQUE(room_number, year, month)
             )""")
             
-            # 詳細收租金記錄表
             cursor.execute("""CREATE TABLE IF NOT EXISTS rent_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 room_number TEXT NOT NULL,
@@ -311,7 +298,6 @@ class RentalDB:
                 UNIQUE(room_number, year, month)
             )""")
             
-            # 電費系統表 (保持不變)
             cursor.execute("""CREATE TABLE IF NOT EXISTS electricity_period (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 period_year INTEGER NOT NULL,
@@ -362,7 +348,6 @@ class RentalDB:
                 UNIQUE(period_id, room_number)
             )""")
             
-            # 支出與備忘錄
             cursor.execute("""CREATE TABLE IF NOT EXISTS expenses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 expense_date TEXT NOT NULL,
@@ -404,7 +389,7 @@ class RentalDB:
         except:
             pass
 
-    # ===== 房客管理 + 繳費計畫 (v13.9 優化) =====
+    # ===== 房客管理 =====
     def room_exists(self, room: str) -> bool:
         with self._get_connection() as conn:
             return conn.execute("SELECT 1 FROM tenants WHERE room_number=? AND is_active=1", (room,)).fetchone() is not None
@@ -423,7 +408,7 @@ class RentalDB:
                     conn.execute("""INSERT INTO tenants(room_number, tenant_name, phone, deposit, base_rent, lease_start, lease_end, payment_method, has_discount, has_water_fee, discount_notes, last_ac_cleaning_date) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (room, name, phone, deposit, base_rent, start, end, payment_method, 1 if has_discount else 0, 1 if has_water_fee else 0, discount_notes, ac_date))
                     
-                    # v13.9 NEW: 自動生成繳費計畫
+                    # v13.9 自動生成繳費計畫
                     self._generate_payment_schedule_for_tenant(room, name, base_rent, has_water_fee, payment_method, start, end)
                     
                     logging.info(f"房客新增: {room} ({name}) - {payment_method} - 自動生成繳費計畫")
@@ -433,14 +418,12 @@ class RentalDB:
             return False, str(e)
 
     def _generate_payment_schedule_for_tenant(self, room: str, tenant_name: str, base_rent: float, has_water_fee: bool, payment_method: str, start_date: str, end_date: str):
-        """v13.9 新增：為新房客自動生成繳費計畫"""
         try:
             amount = base_rent + (WATER_FEE if has_water_fee else 0)
             schedule = generate_payment_schedule(payment_method, start_date, end_date)
             
             with self._get_connection() as conn:
                 for year, month in schedule:
-                    # 計算應繳日期（月底或月初）
                     if month == 12:
                         due_date = f"{year + 1}-01-05"
                     else:
@@ -469,9 +452,8 @@ class RentalDB:
             conn.execute("UPDATE tenants SET is_active=0 WHERE id=?", (tid,))
         return True, "✅ 已刪除"
 
-    # ===== 繳費計畫管理 (v13.9 核心功能) =====
+    # ===== 繳費計畫管理 =====
     def get_payment_schedule(self, room: Optional[str] = None, status: Optional[str] = None, year: Optional[int] = None) -> pd.DataFrame:
-        """查詢繳費計畫"""
         with self._get_connection() as conn:
             q = "SELECT * FROM payment_schedule WHERE 1=1"
             if room:
@@ -484,7 +466,6 @@ class RentalDB:
             return pd.read_sql(q, conn)
 
     def mark_payment_done(self, payment_id: int, paid_date: str, paid_amount: float, notes: str = ""):
-        """標記繳費已完成"""
         try:
             with self._get_connection() as conn:
                 conn.execute("""UPDATE payment_schedule 
@@ -498,7 +479,6 @@ class RentalDB:
             return False, f"❌ 失敗: {str(e)}"
 
     def get_payment_summary(self, year: int) -> Dict:
-        """繳費統計"""
         with self._get_connection() as conn:
             due = conn.execute("SELECT SUM(amount) FROM payment_schedule WHERE payment_year=?", (year,)).fetchone()[0] or 0
             paid = conn.execute("SELECT SUM(paid_amount) FROM payment_schedule WHERE payment_year=? AND status='已繳'", (year,)).fetchone()[0] or 0
@@ -506,32 +486,27 @@ class RentalDB:
             return {'total_due': due, 'total_paid': paid, 'unpaid_count': unpaid, 'collection_rate': (paid/due*100) if due > 0 else 0}
 
     def get_overdue_payments(self) -> pd.DataFrame:
-        """查詢逾期未繳"""
         today = date.today().strftime("%Y-%m-%d")
         with self._get_connection() as conn:
             return pd.read_sql(f"""
-                SELECT room_number as '房號', tenant_name as '房客', payment_month as '月份', 
-                       amount as '應繳', payment_method as '繳費方式', due_date as '應繳日期'
+                SELECT room_number, tenant_name, payment_month, amount, due_date
                 FROM payment_schedule
                 WHERE status='未繳' AND due_date < '{today}'
                 ORDER BY due_date ASC
             """, conn)
 
     def get_upcoming_payments(self, days_ahead: int = 7) -> pd.DataFrame:
-        """查詢即將繳費"""
         today = date.today()
         future_date = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
         today_str = today.strftime("%Y-%m-%d")
         with self._get_connection() as conn:
             return pd.read_sql(f"""
-                SELECT room_number as '房號', tenant_name as '房客', payment_month as '月份',
-                       amount as '應繳', payment_method as '繳費方式', due_date as '應繳日期'
+                SELECT room_number, tenant_name, payment_month, amount, due_date
                 FROM payment_schedule
                 WHERE status='未繳' AND due_date >= '{today_str}' AND due_date <= '{future_date}'
                 ORDER BY due_date ASC
             """, conn)
 
-    # ===== 其他功能 (保持不變) =====
     def record_rent(self, room, tenant_name, year, month, base, water, discount, paid, date_str, method, notes):
         try:
             with self._get_connection() as conn:
@@ -695,48 +670,60 @@ def display_room_card(room, status_color, status_text, detail_text=""):
     """, unsafe_allow_html=True)
 
 # ============================================================================
-# 頁面層 (v13.9 優化)
+# 頁面層 (v13.9 Final - 儀表板優化)
 # ============================================================================
 def page_dashboard(db: RentalDB):
+    """優化版儀表板 - 房間 + 租屋率 + 繳費小卡片"""
     st.header("📊 儀表板")
     
     tenants = db.get_tenants()
     today = date.today()
     
-    # 1. 繳費狀態提醒 (v13.9 新增)
-    st.markdown("### 💰 繳費狀態監控")
-    col1, col2, col3 = st.columns(3)
+    # ===== 第 1 層：統計卡片 (房間狀態) =====
+    st.markdown("### 🏢 物業概況")
+    col1, col2, col3, col4 = st.columns(4)
     
-    # 逾期統計
-    overdue = db.get_overdue_payments()
+    occupancy = len(tenants)
+    rate = (occupancy / 12 * 100) if occupancy > 0 else 0
+    
     with col1:
-        display_card("🚨 逾期未繳", f"{len(overdue)} 筆", "red")
-    
-    # 即將到期統計
-    upcoming = db.get_upcoming_payments(7)
+        display_card("入住房間", f"{occupancy} 間", "green")
     with col2:
-        display_card("⏰ 7天內繳費", f"{len(upcoming)} 筆", "orange")
-    
-    # 年度統計
-    summary = db.get_payment_summary(today.year)
+        display_card("入住率", f"{rate:.0f}%", "blue")
     with col3:
-        display_card("📈 收款率", f"{summary['collection_rate']:.1f}%", "green")
+        display_card("空房", f"{12 - occupancy} 間", "red")
+    with col4:
+        display_card("總房間", "12 間", "orange")
     
     st.divider()
     
-    # 2. 逾期警告
-    if not overdue.empty:
-        st.error("🚨 **逾期未繳列表**")
-        st.dataframe(overdue, use_container_width=True, hide_index=True)
-        st.divider()
+    # ===== 第 2 層：繳費監控小卡片 (精簡版) =====
+    st.markdown("### 💳 繳費狀態 (點擊【智慧繳費】查詳情)")
     
-    # 3. 即將繳費提醒
-    if not upcoming.empty:
-        st.warning("⏰ **即將繳費清單 (7天內)**")
-        st.dataframe(upcoming, use_container_width=True, hide_index=True)
-        st.divider()
+    col1, col2, col3 = st.columns(3)
     
-    # 4. 租約到期提醒 (保留)
+    overdue = db.get_overdue_payments()
+    upcoming = db.get_upcoming_payments(7)
+    summary = db.get_payment_summary(today.year)
+    
+    with col1:
+        if len(overdue) > 0:
+            display_card("🚨 逾期未繳", f"{len(overdue)} 筆", "red")
+        else:
+            display_card("✅ 無逾期", "0 筆", "green")
+    
+    with col2:
+        if len(upcoming) > 0:
+            display_card("⏰ 7天內繳費", f"{len(upcoming)} 筆", "orange")
+        else:
+            display_card("✅ 無待繳", "0 筆", "green")
+    
+    with col3:
+        display_card("📈 收款率", f"{summary['collection_rate']:.1f}%", "blue")
+    
+    st.divider()
+    
+    # ===== 第 3 層：租約到期提醒 =====
     expiring_soon = []
     if not tenants.empty:
         for _, t in tenants.iterrows():
@@ -749,15 +736,15 @@ def page_dashboard(db: RentalDB):
                 pass
     
     if expiring_soon:
-        st.markdown("### 📋 即將到期合約")
+        st.markdown("### 🚨 **即將到期合約 (45天內)**")
         cols = st.columns(4)
         for i, (room, name, days, end_date) in enumerate(expiring_soon):
             with cols[i % 4]:
                 st.error(f"**{room} {name}**\n\n剩餘 **{days}** 天\n\n({end_date})")
         st.divider()
-
-    # 5. 房間狀態
-    st.subheader("🏠 房間實時狀態")
+    
+    # ===== 第 4 層：房間狀態網格 =====
+    st.markdown("### 🏠 **房間實時狀態**")
     active_rooms = tenants.set_index('room_number') if not tenants.empty else pd.DataFrame()
     cols = st.columns(6)
     
@@ -774,7 +761,7 @@ def page_dashboard(db: RentalDB):
                     else:
                         status_color = "green"
                         status_text = t['tenant_name']
-                        detail_text = f"至 {t['lease_end']}"
+                        detail_text = f"{t['payment_method']}"
                 except:
                     status_color = "green"
                     status_text = t['tenant_name']
@@ -783,8 +770,45 @@ def page_dashboard(db: RentalDB):
             else:
                 display_room_card(room, "red", "空房", "可招租")
 
+    st.divider()
+    
+    # ===== 第 5 層：年度房租表 =====
+    st.markdown("### 📅 **年度房租繳費總覽**")
+    year = st.selectbox("選擇年份", [today.year, today.year + 1], key="dash_year")
+    rent_matrix = db.get_rent_matrix(year)
+    if not rent_matrix.empty:
+        st.dataframe(rent_matrix, use_container_width=True)
+    else:
+        st.info("尚無資料")
+
+    st.divider()
+    
+    # ===== 第 6 層：待辦事項 & 未繳房租 =====
+    col_memo, col_unpaid = st.columns([1, 1])
+    
+    with col_memo:
+        st.subheader("📝 待辦事項")
+        memos = db.get_memos(completed=False)
+        if not memos.empty:
+            for _, memo in memos.iterrows():
+                c1, c2 = st.columns([5, 1])
+                c1.write(f"• {memo['memo_text']}")
+                if c2.button("✓", key=f"m_{memo['id']}"):
+                    db.complete_memo(memo['id'])
+                    st.rerun()
+        else:
+            st.caption("✅ 無待辦事項")
+
+    with col_unpaid:
+        st.subheader("💰 未繳房租")
+        unpaid = db.get_unpaid_rents()
+        if not unpaid.empty:
+            st.dataframe(unpaid[['房號','房客','金額']], use_container_width=True, hide_index=True)
+        else:
+            st.caption("✅ 全數繳清")
+
 def page_payment_tracker(db: RentalDB):
-    """v13.9 新增：智慧繳費追蹤頁面"""
+    """完整繳費追蹤頁面"""
     st.header("💳 智慧繳費追蹤")
     
     tab1, tab2, tab3, tab4 = st.tabs(["📋 繳費計畫", "✅ 標記繳費", "📊 統計分析", "⚠️ 逾期管理"])
@@ -804,7 +828,6 @@ def page_payment_tracker(db: RentalDB):
         schedule_df = db.get_payment_schedule(room=room, status=status, year=datetime.now().year)
         
         if not schedule_df.empty:
-            # 美化顯示
             display_cols = ['room_number', 'tenant_name', 'payment_month', 'amount', 'payment_method', 'due_date', 'status', 'paid_date']
             display_df = schedule_df[display_cols].copy()
             display_df.columns = ['房號', '房客', '月份', '應繳', '繳費方式', '應繳日期', '狀態', '繳費日期']
@@ -816,7 +839,6 @@ def page_payment_tracker(db: RentalDB):
     with tab2:
         st.subheader("✅ 標記繳費已完成")
         
-        # 查詢未繳項目
         unpaid = db.get_payment_schedule(status="未繳")
         if unpaid.empty:
             st.success("✅ 所有繳費已清！")
@@ -861,7 +883,6 @@ def page_payment_tracker(db: RentalDB):
         
         st.divider()
         
-        # 繳費方式分佈
         tenants = db.get_tenants()
         if not tenants.empty:
             payment_dist = tenants['payment_method'].value_counts()
@@ -882,9 +903,8 @@ def page_payment_tracker(db: RentalDB):
             st.error(f"🚨 共有 {len(overdue)} 筆逾期未繳")
             st.dataframe(overdue, use_container_width=True, hide_index=True)
             
-            # 發送提醒按鈕
             if st.button("📤 複製逾期清單 (用於提醒)", use_container_width=True):
-                copy_text = overdue[['房號', '房客', '應繳日期', '應繳']].to_string(index=False)
+                copy_text = overdue[['room_number', 'tenant_name', 'due_date', 'amount']].to_string(index=False)
                 st.code(copy_text, language="text")
 
 def page_tenants(db: RentalDB):
@@ -906,17 +926,16 @@ def page_tenants(db: RentalDB):
             e = c2.date_input("結束", value=date.today()+timedelta(days=365))
             st.divider()
             
-            st.markdown("### 📋 繳費方式設定 (v13.9 新增)")
-            pay = st.selectbox("繳費方式", PAYMENT_METHODS, help="選擇繳費方式後，系統會自動生成全年繳費計畫")
+            st.markdown("### 📋 繳費方式設定")
+            pay = st.selectbox("繳費方式", PAYMENT_METHODS, help="系統會自動生成繳費計畫")
             water = st.checkbox("收水費 ($100/月)")
             note = st.text_input("備註")
             ac = st.text_input("冷氣清洗日")
             
-            if st.form_submit_button("✅ 確認新增並自動生成繳費計畫", type="primary"):
+            if st.form_submit_button("✅ 確認新增", type="primary"):
                 ok, m = db.upsert_tenant(r, n, p, dep, rent, s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d"), pay, False, water, note, ac)
                 if ok:
                     st.success(m)
-                    st.info(f"✅ 已自動為 {r} 生成{pay}繳費計畫！")
                     st.session_state.edit_id = None
                     time.sleep(2)
                     st.rerun()
@@ -962,7 +981,6 @@ def page_tenants(db: RentalDB):
                     if row.get('last_ac_cleaning_date'):
                         st.write(f"**冷氣**: {row['last_ac_cleaning_date']}")
                     
-                    # v13.9 新增：顯示該房間的繳費計畫
                     room_schedule = db.get_payment_schedule(room=row['room_number'], year=datetime.now().year)
                     if not room_schedule.empty:
                         st.markdown("**本年繳費計畫**")
@@ -1262,7 +1280,7 @@ def main():
 
     with st.sidebar:
         st.title("🏠 幸福之家")
-        st.caption("v13.9 智慧繳費追蹤版")
+        st.caption("v13.9 Final 優化版")
         st.divider()
         menu = st.radio("主選單", [
             "📊 儀表板",
