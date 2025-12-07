@@ -1,7 +1,4 @@
-streamlit>=1.32
-pandas
-numpy
-openpyxl
-python-dateutil
-pytz
-pip install streamlit
+streamlit==1.52.1
+pandas>=2.0.0
+openpyxl>=3.0.0
+sqlite3-python>=1.0.0
