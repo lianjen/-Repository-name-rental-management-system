@@ -1,11 +1,11 @@
 """
-幸福之家管理系統 Pro v13.3 - 租金折扣計算版
+幸福之家管理系統 Pro v13.4 - 水費管理版
 新增功能：
-1. 租金折扣選項：勾選是否折房租
-2. 自動計算實際月均租金
-3. 房客列表顯示折後租金
-4. 房租繳費記錄自動生成
-5. 詳細的折扣說明與計算步驟
+1. 水費勾選：是否包含水費（每月$100）
+2. 自動計算含水費的實際租金
+3. 房客列表顯示是否含水費
+4. 租金計算自動包含水費
+5. 所有其他功能完全保持不變
 """
 
 import streamlit as st
@@ -40,6 +40,7 @@ SHARING_ROOMS = ["2A", "2B", "3A", "3B", "3C", "3D", "4A", "4B", "4C", "4D"]
 NON_SHARING_ROOMS = ["1A", "1B"]
 EXPENSE_CATEGORIES = ["維修", "雜項", "貸款", "水電費", "網路費"]
 PAYMENT_METHODS = ["月繳", "半年繳", "年繳"]
+WATER_FEE = 100  # 水費固定 $100/月
 
 # ============================================================================
 # 電費計算類 (保持原樣)
@@ -154,19 +155,23 @@ class ElectricityCalculatorV10:
         return True, "✅ 所有檢查都通過了！"
 
 # ============================================================================
-# 租金計算工具函數 (NEW)
+# 租金計算工具函數 (v13.4 新增水費參數)
 # ============================================================================
-def calculate_actual_monthly_rent(base_rent: float, payment_method: str, has_discount: bool) -> Dict[str, float]:
+def calculate_actual_monthly_rent(base_rent: float, payment_method: str, has_discount: bool, has_water_fee: bool = False) -> Dict[str, float]:
     """
-    計算實際月均租金
+    計算實際月均租金（包含水費）
     
     Args:
         base_rent: 基本租金（月繳金額）
         payment_method: 繳費方式（月繳、半年繳、年繳）
         has_discount: 是否有折扣（年繳折1個月）
+        has_water_fee: 是否包含水費（$100/月）
     
     Returns:
         {
+            'base_rent': 基本租金,
+            'water_fee': 水費,
+            'actual_rent': 實際租金（含水費）,
             'monthly_payment': 每期實際支付金額,
             'monthly_average': 實際月均租金,
             'discount_amount': 折扣金額,
@@ -174,45 +179,57 @@ def calculate_actual_monthly_rent(base_rent: float, payment_method: str, has_dis
             'description': 說明文字
         }
     """
+    # 第一步：計算含水費的實際租金
+    actual_rent = base_rent + (WATER_FEE if has_water_fee else 0)
+    
     result = {
-        'monthly_payment': base_rent,
-        'monthly_average': base_rent,
+        'base_rent': base_rent,
+        'water_fee': WATER_FEE if has_water_fee else 0,
+        'actual_rent': actual_rent,
+        'monthly_payment': actual_rent,
+        'monthly_average': actual_rent,
         'discount_amount': 0,
-        'annual_total': base_rent * 12,
+        'annual_total': actual_rent * 12,
         'description': '月繳'
     }
     
     if payment_method == "月繳":
-        result['description'] = f"月繳 ${base_rent:,}/月"
+        result['description'] = f"月繳 ${actual_rent:,}/月"
+        if has_water_fee:
+            result['description'] += f"（房租${base_rent:,} + 水費${WATER_FEE}）"
     
     elif payment_method == "半年繳":
-        result['monthly_payment'] = base_rent * 6
-        result['annual_total'] = base_rent * 12
+        result['monthly_payment'] = actual_rent * 6
+        result['annual_total'] = actual_rent * 12
         if has_discount:
-            result['discount_amount'] = base_rent
-            result['annual_total'] = base_rent * 12 - base_rent
+            result['discount_amount'] = actual_rent
+            result['annual_total'] = actual_rent * 12 - actual_rent
             result['monthly_average'] = result['annual_total'] / 12
             result['description'] = f"半年繳 ${result['monthly_payment']:,}/期，年折 ${result['discount_amount']:,}"
         else:
-            result['monthly_average'] = base_rent
+            result['monthly_average'] = actual_rent
             result['description'] = f"半年繳 ${result['monthly_payment']:,}/期"
+        if has_water_fee:
+            result['description'] += f"（含水費${WATER_FEE}）"
     
     elif payment_method == "年繳":
-        result['monthly_payment'] = base_rent * 12
-        result['annual_total'] = base_rent * 12
+        result['monthly_payment'] = actual_rent * 12
+        result['annual_total'] = actual_rent * 12
         if has_discount:
-            result['discount_amount'] = base_rent
-            result['annual_total'] = base_rent * 12 - base_rent
+            result['discount_amount'] = actual_rent
+            result['annual_total'] = actual_rent * 12 - actual_rent
             result['monthly_average'] = result['annual_total'] / 12
             result['description'] = f"年繳 ${result['monthly_payment']:,}（折1個月），平均月租 ${result['monthly_average']:.0f}"
         else:
-            result['monthly_average'] = base_rent
+            result['monthly_average'] = actual_rent
             result['description'] = f"年繳 ${result['monthly_payment']:,}/年"
+        if has_water_fee:
+            result['description'] += f"（含水費${WATER_FEE}）"
     
     return result
 
 # ============================================================================
-# 數據庫類 (v13.3 優化版)
+# 數據庫類 (v13.4 優化版)
 # ============================================================================
 class RentalDB:
     def __init__(self, db_path: str = "rental_system_12rooms.db"):
@@ -265,7 +282,7 @@ class RentalDB:
     def _init_db(self):
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            # 房客表 (v13.3 新增 discount 欄位)
+            # 房客表 (v13.4 新增 water_fee 欄位)
             cursor.execute("""CREATE TABLE IF NOT EXISTS tenants (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 room_number TEXT UNIQUE NOT NULL,
@@ -277,6 +294,7 @@ class RentalDB:
                 lease_end TEXT NOT NULL,
                 payment_method TEXT DEFAULT '月繳',
                 has_discount INTEGER DEFAULT 0,
+                has_water_fee INTEGER DEFAULT 0,
                 discount_notes TEXT,
                 last_ac_cleaning_date TEXT,
                 is_active INTEGER DEFAULT 1,
@@ -374,8 +392,10 @@ class RentalDB:
                     cursor.execute("ALTER TABLE tenants ADD COLUMN discount_notes TEXT DEFAULT ''")
                 if "last_ac_cleaning_date" not in columns:
                     cursor.execute("ALTER TABLE tenants ADD COLUMN last_ac_cleaning_date TEXT")
-                if "has_discount" not in columns:  # v13.3 新增
+                if "has_discount" not in columns:
                     cursor.execute("ALTER TABLE tenants ADD COLUMN has_discount INTEGER DEFAULT 0")
+                if "has_water_fee" not in columns:  # v13.4 新增
+                    cursor.execute("ALTER TABLE tenants ADD COLUMN has_water_fee INTEGER DEFAULT 0")
                     
                 cursor.execute("PRAGMA table_info(electricity_calculation)")
                 e_cols = [info[1] for info in cursor.fetchall()]
@@ -389,7 +409,7 @@ class RentalDB:
         except Exception as e:
             logging.warning(f"Schema 修復失敗: {e}")
 
-    # ========== 房客管理 (v13.3 新增折扣參數) ==========
+    # ========== 房客管理 (v13.4 新增水費參數) ==========
     def room_exists(self, room: str) -> bool:
         try:
             with self._get_connection() as conn:
@@ -402,19 +422,20 @@ class RentalDB:
 
     def upsert_tenant(self, room: str, name: str, phone: str, deposit: float, base_rent: float, 
                      start: str, end: str, payment_method: str = "月繳", has_discount: bool = False,
-                     discount_notes: str = "", ac_date: str = None, tenant_id: Optional[int] = None) -> Tuple[bool, str]:
+                     has_water_fee: bool = False, discount_notes: str = "", ac_date: str = None, 
+                     tenant_id: Optional[int] = None) -> Tuple[bool, str]:
         try:
             with self._get_connection() as conn:
                 if tenant_id:
-                    conn.execute("""UPDATE tenants SET tenant_name=?, phone=?, deposit=?, base_rent=?, lease_start=?, lease_end=?, payment_method=?, has_discount=?, discount_notes=?, last_ac_cleaning_date=? WHERE id=?""", 
-                        (name, phone, deposit, base_rent, start, end, payment_method, 1 if has_discount else 0, discount_notes, ac_date, tenant_id))
+                    conn.execute("""UPDATE tenants SET tenant_name=?, phone=?, deposit=?, base_rent=?, lease_start=?, lease_end=?, payment_method=?, has_discount=?, has_water_fee=?, discount_notes=?, last_ac_cleaning_date=? WHERE id=?""", 
+                        (name, phone, deposit, base_rent, start, end, payment_method, 1 if has_discount else 0, 1 if has_water_fee else 0, discount_notes, ac_date, tenant_id))
                     logging.info(f"房客更新: {room} ({name})")
                     return True, f"✅ 房號 {room} 已更新"
                 else:
                     if self.room_exists(room): 
                         return False, f"❌ 房號 {room} 已存在"
-                    conn.execute("""INSERT INTO tenants(room_number, tenant_name, phone, deposit, base_rent, lease_start, lease_end, payment_method, has_discount, discount_notes, last_ac_cleaning_date) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
-                        (room, name, phone, deposit, base_rent, start, end, payment_method, 1 if has_discount else 0, discount_notes, ac_date))
+                    conn.execute("""INSERT INTO tenants(room_number, tenant_name, phone, deposit, base_rent, lease_start, lease_end, payment_method, has_discount, has_water_fee, discount_notes, last_ac_cleaning_date) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
+                        (room, name, phone, deposit, base_rent, start, end, payment_method, 1 if has_discount else 0, 1 if has_water_fee else 0, discount_notes, ac_date))
                     logging.info(f"房客新增: {room} ({name})")
                     return True, f"✅ 房號 {room} 已新增"
         except Exception as e: 
@@ -814,30 +835,50 @@ def page_tenants(db: RentalDB):
                     ac_date_val = st.text_input("冷氣清洗日期", placeholder="例如：113.06.28", key="add_ac")
                 with col2:
                     has_discount = st.checkbox("年繳折1個月房租", value=False, key="add_discount", help="勾選此項表示該房客年繳時可折1個月房租")
-                    discount_notes = st.text_input("其他備註", placeholder="例：虎科大碩一、水費折100", key="add_notes")
+                    has_water_fee = st.checkbox("收水費（$100/月）", value=False, key="add_water", help="勾選此項表示房客需額外支付水費$100")
+                
+                st.divider()
+                discount_notes = st.text_input("其他備註", placeholder="例：虎科大碩一", key="add_notes")
                 
                 # 顯示租金計算
                 if st.session_state.get("add_payment"):
                     st.divider()
                     st.subheader("💰 租金計算預覽")
-                    calc = calculate_actual_monthly_rent(st.session_state.get("add_rent", 6000), st.session_state.get("add_payment", "月繳"), st.session_state.get("add_discount", False))
+                    calc = calculate_actual_monthly_rent(
+                        st.session_state.get("add_rent", 6000), 
+                        st.session_state.get("add_payment", "月繳"), 
+                        st.session_state.get("add_discount", False),
+                        st.session_state.get("add_water", False)
+                    )
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        display_card("每期支付", f"${calc['monthly_payment']:,.0f}", "blue")
+                        display_card("實際月租", f"${calc['actual_rent']:,.0f}", "blue")
                     with col2:
-                        display_card("實際月均", f"${calc['monthly_average']:.0f}", "green")
+                        display_card("每期支付", f"${calc['monthly_payment']:,.0f}", "green")
                     with col3:
-                        if calc['discount_amount'] > 0:
-                            display_card("年度折扣", f"${calc['discount_amount']:,.0f}", "orange")
+                        display_card("實際月均", f"${calc['monthly_average']:.0f}", "orange")
+                    
                     st.info(f"📌 {calc['description']}")
+                    
+                    # 詳細說明
+                    st.markdown("**計算詳情：**")
+                    if calc['water_fee'] > 0:
+                        st.write(f"• 房租：${calc['base_rent']:,} + 水費：${calc['water_fee']} = 實際月租：${calc['actual_rent']:,}")
+                    else:
+                        st.write(f"• 房租：${calc['base_rent']:,}（無水費）")
                 
                 st.divider()
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.form_submit_button("✅ 確認新增", type="primary", use_container_width=True):
-                        ok, msg = db.upsert_tenant(room, name, phone, deposit, st.session_state.get("add_rent", 6000), 
-                            start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), st.session_state.get("add_payment", "月繳"), 
-                            st.session_state.get("add_discount", False), discount_notes, ac_date_val)
+                        ok, msg = db.upsert_tenant(
+                            room, name, phone, deposit, st.session_state.get("add_rent", 6000), 
+                            start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), 
+                            st.session_state.get("add_payment", "月繳"), 
+                            st.session_state.get("add_discount", False),
+                            st.session_state.get("add_water", False),
+                            discount_notes, ac_date_val
+                        )
                         if ok:
                             st.success(msg)
                             st.session_state.edit_id = None
@@ -875,30 +916,50 @@ def page_tenants(db: RentalDB):
                     ac_date_val = st.text_input("冷氣清洗日期", value=tenant.get('last_ac_cleaning_date', ''), key="edit_ac")
                 with col2:
                     has_discount = st.checkbox("年繳折1個月房租", value=bool(tenant.get('has_discount', 0)), key="edit_discount", help="勾選此項表示該房客年繳時可折1個月房租")
-                    discount_notes = st.text_input("其他備註", value=tenant.get('discount_notes', ''), key="edit_notes")
+                    has_water_fee = st.checkbox("收水費（$100/月）", value=bool(tenant.get('has_water_fee', 0)), key="edit_water", help="勾選此項表示房客需額外支付水費$100")
+                
+                st.divider()
+                discount_notes = st.text_input("其他備註", value=tenant.get('discount_notes', ''), key="edit_notes")
                 
                 # 顯示租金計算
                 if st.session_state.get("edit_payment"):
                     st.divider()
                     st.subheader("💰 租金計算預覽")
-                    calc = calculate_actual_monthly_rent(st.session_state.get("edit_rent", tenant['base_rent']), st.session_state.get("edit_payment", tenant.get('payment_method', '月繳')), st.session_state.get("edit_discount", bool(tenant.get('has_discount', 0))))
+                    calc = calculate_actual_monthly_rent(
+                        st.session_state.get("edit_rent", tenant['base_rent']), 
+                        st.session_state.get("edit_payment", tenant.get('payment_method', '月繳')), 
+                        st.session_state.get("edit_discount", bool(tenant.get('has_discount', 0))),
+                        st.session_state.get("edit_water", bool(tenant.get('has_water_fee', 0)))
+                    )
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        display_card("每期支付", f"${calc['monthly_payment']:,.0f}", "blue")
+                        display_card("實際月租", f"${calc['actual_rent']:,.0f}", "blue")
                     with col2:
-                        display_card("實際月均", f"${calc['monthly_average']:.0f}", "green")
+                        display_card("每期支付", f"${calc['monthly_payment']:,.0f}", "green")
                     with col3:
-                        if calc['discount_amount'] > 0:
-                            display_card("年度折扣", f"${calc['discount_amount']:,.0f}", "orange")
+                        display_card("實際月均", f"${calc['monthly_average']:.0f}", "orange")
+                    
                     st.info(f"📌 {calc['description']}")
+                    
+                    # 詳細說明
+                    st.markdown("**計算詳情：**")
+                    if calc['water_fee'] > 0:
+                        st.write(f"• 房租：${calc['base_rent']:,} + 水費：${calc['water_fee']} = 實際月租：${calc['actual_rent']:,}")
+                    else:
+                        st.write(f"• 房租：${calc['base_rent']:,}（無水費）")
                 
                 st.divider()
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     if st.form_submit_button("✅ 確認更新", type="primary"):
-                        ok, msg = db.upsert_tenant(tenant['room_number'], name, phone, deposit, st.session_state.get("edit_rent", tenant['base_rent']),
-                            start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), st.session_state.get("edit_payment", tenant.get('payment_method', '月繳')), 
-                            st.session_state.get("edit_discount", bool(tenant.get('has_discount', 0))), discount_notes, ac_date_val, tenant['id'])
+                        ok, msg = db.upsert_tenant(
+                            tenant['room_number'], name, phone, deposit, st.session_state.get("edit_rent", tenant['base_rent']),
+                            start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), 
+                            st.session_state.get("edit_payment", tenant.get('payment_method', '月繳')), 
+                            st.session_state.get("edit_discount", bool(tenant.get('has_discount', 0))),
+                            st.session_state.get("edit_water", bool(tenant.get('has_water_fee', 0))),
+                            discount_notes, ac_date_val, tenant['id']
+                        )
                         if ok:
                             st.success(msg)
                             st.session_state.edit_id = None
@@ -933,15 +994,27 @@ def page_tenants(db: RentalDB):
         if not tenants_df.empty:
             for idx, (_, row) in enumerate(tenants_df.iterrows()):
                 # 計算實際月均租金並顯示
-                calc = calculate_actual_monthly_rent(row['base_rent'], row['payment_method'], bool(row.get('has_discount', 0)))
+                calc = calculate_actual_monthly_rent(
+                    row['base_rent'], 
+                    row['payment_method'], 
+                    bool(row.get('has_discount', 0)),
+                    bool(row.get('has_water_fee', 0))
+                )
+                
+                water_badge = " 💧" if bool(row.get('has_water_fee', 0)) else ""
                 ac_info = f" | ❄️ {row['last_ac_cleaning_date']}" if row['last_ac_cleaning_date'] else ""
-                expander_label = f"🏠 {row['room_number']} - {row['tenant_name']} | 月均${calc['monthly_average']:.0f}{ac_info}"
+                expander_label = f"🏠 {row['room_number']} - {row['tenant_name']} | 月均${calc['monthly_average']:.0f}{water_badge}{ac_info}"
                 
                 with st.expander(expander_label):
                     col1, col2 = st.columns([3, 1])
                     with col1:
                         st.write(f"**電話：** {row['phone']}")
                         st.write(f"**基本房租：** ${row['base_rent']:,}/月")
+                        
+                        # 水費標示
+                        if calc['water_fee'] > 0:
+                            st.write(f"**水費：** ${calc['water_fee']}/月")
+                            st.write(f"**實際月租：** ${calc['actual_rent']:,}/月")
                         
                         # 顯示繳費方式與計算
                         st.divider()
@@ -1218,10 +1291,11 @@ def page_settings(db: RentalDB):
                         if ac_date == 'nan': 
                             ac_date = ""
                         
-                        # v13.3 新增：檢查是否有折扣
+                        # v13.4 新增：檢查是否有折扣與水費
                         has_discount = "折" in notes or "折" in payment_method_raw
+                        has_water_fee = "水費" in notes or "水" in notes
                         
-                        ok, msg = db.upsert_tenant(room, name, "", deposit, rent, lease_start, lease_end, payment_method, has_discount, notes, ac_date)
+                        ok, msg = db.upsert_tenant(room, name, "", deposit, rent, lease_start, lease_end, payment_method, has_discount, has_water_fee, notes, ac_date)
                         if ok: 
                             success_count += 1
                         else: 
@@ -1263,7 +1337,7 @@ def page_settings(db: RentalDB):
                     st.error(msg)
 
 def main():
-    st.set_page_config(page_title="幸福之家 v13.3", page_icon="🏠", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="幸福之家 v13.4", page_icon="🏠", layout="wide", initial_sidebar_state="expanded")
     st.markdown("""
     <style>
     [data-testid="stSidebarContent"] { padding-top: 0rem; }
@@ -1273,7 +1347,7 @@ def main():
     
     with st.sidebar:
         st.title("🏠 幸福之家")
-        st.caption("v13.3 租金折扣計算版")
+        st.caption("v13.4 水費管理版")
         st.divider()
         menu = st.radio("主選單", ["📊 儀表板", "👥 房客", "💡 電費", "💸 支出", "⚙️ 設定"], label_visibility="collapsed")
     
