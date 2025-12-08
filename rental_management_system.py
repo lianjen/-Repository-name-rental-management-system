@@ -445,11 +445,17 @@ class RentalDB:
             return pd.read_sql("SELECT * FROM tenants WHERE is_active=1 ORDER BY room_number", conn)
 
     def get_tenant_by_id(self, tid: int):
+    try:
         with self._get_connection() as conn:
+            conn.row_factory = sqlite3.Row    # ✅ 設置行工廠
             row = conn.execute("SELECT * FROM tenants WHERE id=?", (tid,)).fetchone()
             if row:
-                return dict(zip([d[0] for d in conn.cursor().description], row))
+                return dict(row)              # ✅ 直接轉換
+            return None
+    except Exception as e:
+        logging.error(f"查詢房客失敗: {e}") # ✅ 錯誤處理
         return None
+
 
     def delete_tenant(self, tid: int):
         with self._get_connection() as conn:
@@ -1247,8 +1253,17 @@ def page_tenants(db: RentalDB):
             st.rerun()
     
     elif st.session_state.edit_id:
-        t = db.get_tenant_by_id(st.session_state.edit_id)
-        st.subheader(f"✏️ 編輯 {t['room_number']} {t['tenant_name']}")
+    t = db.get_tenant_by_id(st.session_state.edit_id)
+    
+    # ✅ 添加 None 檢查
+    if t is None:
+        st.error("❌ 找不到該房客資料，可能已被刪除")
+        if st.button("🔙 返回房客列表"):
+            st.session_state.edit_id = None
+            st.rerun()
+        st.stop()
+    
+    st.subheader(f"✏️ 編輯 {t['room_number']} {t['tenant_name']}")
         with st.form("edit_t"):
             c1, c2 = st.columns(2)
             n = c1.text_input("姓名", t['tenant_name'])
