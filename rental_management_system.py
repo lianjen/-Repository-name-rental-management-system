@@ -453,7 +453,7 @@ class RentalDB:
                 return dict(row)              # ✅ 直接轉換
             return None
     except Exception as e:
-        logging.error(f"查詢房客失敗: {e}") # ✅ 錯誤處理
+        logging.error(f"查詢房客失敗: {e}")  # ✅ 移除省略號
         return None
 
 
@@ -621,7 +621,12 @@ class RentalDB:
 
     def get_unpaid_rents(self) -> pd.DataFrame:
         with self._get_connection() as conn:
-            return pd.read_sql("""SELECT r.room_number as '房號', t.tenant_name as '房客', r.year as '年', r.month as '月', r.amount as '金額' FROM rent_payments r JOIN tenants t ON r.room_number = t.room_number WHERE r.is_paid = 0 AND t.is_active = 1 ORDER BY r.year DESC, r.month DESC""", conn)
+            return pd.read_sql("""SELECT r.room_number as '房號', t.tenant_name as '房客', r.year as '年', r.month as '月', r.amount as '金額' 
+                    FROM rent_payments r 
+                    JOIN tenants t ON r.room_number = t.room_number 
+                    WHERE r.is_paid = 0 AND t.is_active = 1 
+                    ORDER BY r.year DESC, r.month DESC""", conn)
+
 
     def add_electricity_period(self, year, ms, me):
         try:
