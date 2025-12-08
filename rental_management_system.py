@@ -445,10 +445,12 @@ class RentalDB:
             return pd.read_sql("SELECT * FROM tenants WHERE is_active=1 ORDER BY room_number", conn)
 
     def get_tenant_by_id(self, tid: int):
-        with self._get_connection() as conn:
-            row = conn.execute("SELECT * FROM tenants WHERE id=?", (tid,)).fetchone()
-            if row:
-                return dict(zip([d[0] for d in conn.cursor().description], row))
+    with self._get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute("SELECT * FROM tenants WHERE id=?", (tid,))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
         return None
 
     def delete_tenant(self, tid: int):
