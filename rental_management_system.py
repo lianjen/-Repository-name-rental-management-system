@@ -287,6 +287,8 @@ class RentalDB:
                 has_water_fee INTEGER DEFAULT 0,
                 discount_notes TEXT,
                 last_ac_cleaning_date TEXT,
+                annual_discount_months INTEGER DEFAULT 0,
+                annual_discount_amount REAL DEFAULT 0,
                 is_active INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
@@ -449,7 +451,7 @@ class RentalDB:
         with self._get_connection() as conn:
             return conn.execute("SELECT 1 FROM tenants WHERE room_number=? AND is_active=1", (room,)).fetchone() is not None
 
-    def upsert_tenant(self, room, name, phone, deposit, base_rent, start, end, payment_method="月繳", has_discount=False, has_water_fee=False, discount_notes="", ac_date=None, tenant_id=None):
+    def upsert_tenant(self, room, name, phone, deposit, base_rent, start, end, payment_method="月繳", has_discount=False, has_water_fee=False, discount_notes="", annual_discount_months=0, ac_date=None, tenant_id=None):
         try:
             with self._get_connection() as conn:
                 if tenant_id:
@@ -472,9 +474,23 @@ class RentalDB:
             logger.error(f"房客操作失敗: {e}")
             return False, str(e)
 
-    def _generate_payment_schedule_for_tenant(self, room: str, tenant_name: str, base_rent: float, has_water_fee: bool, payment_method: str, start_date: str, end_date: str):
+    def _generate_payment_schedule_for_tenant(self, room: str, tenant_name: str, base_rent: float, has_water_fee: bool, payment_method: str, start_date: str, end_date: str, has_discount: bool = False, annual_discount_months: int = 0):
         try:
-            amount = base_rent + (WATER_FEE if has_water_fee else 0)
+        monthly_amount = base_rent + (WATER_FEE if has_water_fee else 0)
+
+        # ✅ 依繳費方式與優惠決定週期金額
+        if payment_method == "月繳":
+            amount = monthly_amount
+        elif payment_method == "半年繳":
+            amount = monthly_amount * 6
+        elif payment_method == "年繳":
+            if has_discount and annual_discount_months > 0:
+                # 年繳優惠：繳 (12 - 優惠月數) 個月
+                amount = monthly_amount * (12 - annual_discount_months)
+            else:
+                amount = monthly_amount * 12
+        else:
+            amount = monthly_amount
             schedule = generate_payment_schedule(payment_method, start_date, end_date)
             with self._get_connection() as conn:
                 for year, month in schedule:
