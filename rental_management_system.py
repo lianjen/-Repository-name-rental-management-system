@@ -1,5 +1,5 @@
 """
-幸福之家管理系統 Pro v13.15 - 莫蘭迪柔和護眼版 (完整修復版)
+幸福之家管理系統 Pro v13.16 - 莫蘭迪柔和護眼版 (完整修復版)
 
 【修復清單】
 ✅ 問題 #1: Session State 競態條件 - 編輯時檢查租客是否存在
@@ -9,6 +9,7 @@
 ✅ 問題 #7: 日期邊界問題 - 使用 relativedelta
 ✅ 問題 #8: 租約到期判斷 - 顯示已過期租約
 ✅ 問題 #11: 缺少輸入驗證 - 添加最小/最大值檢查
+✅ 問題 #12: StreamlitMixedNumericTypesError - 修復所有 number_input 數值類型
 
 【功能保持】
 - 所有原有功能完整保留
@@ -33,10 +34,9 @@ from typing import Optional, Tuple, Dict, List
 LOG_DIR = os.path.join(os.getcwd(), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# ✅ 改進：使用 RotatingFileHandler，自動輪替日誌
 handler = RotatingFileHandler(
     os.path.join(LOG_DIR, "rental_system.log"),
-    maxBytes=10*1024*1024,  # 10 MB
+    maxBytes=10*1024*1024,
     backupCount=5,
     encoding='utf-8'
 )
@@ -74,21 +74,19 @@ class ElectricityCalculatorV10:
         self.non_sharing_records = {}
 
     def check_tdy_bills(self, tdy_data: Dict[str, Tuple[float, float]]) -> bool:
-        """✅ 修復 #6：改進邏輯，先檢查再計算，避免除零錯誤"""
         st.markdown("### 📊 【第 1 步】台電單據檢查")
         valid_count = 0
         total_kwh = 0
         total_fee = 0
         
         for floor, (fee, kwh) in tdy_data.items():
-            # ✅ 先檢查，避免除零錯誤
             if fee == 0 and kwh == 0:
                 self.errors.append(f"🚨 {floor}: 費用與度數皆為 0")
             elif kwh == 0:
                 self.errors.append(f"🚨 {floor}: 度數為 0（無法計算單價）")
             elif fee == 0:
                 self.errors.append(f"🚨 {floor}: 費用為 0（無法計算單價）")
-            elif kwh > 0 and fee > 0:  # ✅ 確保都大於 0 才計算
+            elif kwh > 0 and fee > 0:
                 unit_price = fee / kwh
                 st.success(f"✅ {floor}: {kwh:.1f}度 × ${unit_price:.4f}/度 = ${fee:,.0f}")
                 valid_count += 1
@@ -174,10 +172,9 @@ class ElectricityCalculatorV10:
 
 
 # ============================================================================
-# 繳費計畫生成工具 (修復版 - 支持 relativedelta)
+# 繳費計畫生成工具
 # ============================================================================
 def generate_payment_schedule(payment_method: str, start_date: str, end_date: str) -> List[Tuple[int, int]]:
-    """✅ 修復 #7：使用準確的月份計算，避免跳過或重複月份"""
     try:
         from dateutil.relativedelta import relativedelta
         use_relativedelta = True
@@ -200,7 +197,6 @@ def generate_payment_schedule(payment_method: str, start_date: str, end_date: st
                 from dateutil.relativedelta import relativedelta
                 current = current + relativedelta(months=1)
             else:
-                # 備用方案：簡單計算
                 if month == 12:
                     current = datetime(year + 1, 1, 1)
                 else:
@@ -229,7 +225,7 @@ def generate_payment_schedule(payment_method: str, start_date: str, end_date: st
 
 
 # ============================================================================
-# 數據庫類 (修復版)
+# 數據庫類
 # ============================================================================
 class RentalDB:
     def __init__(self, db_path: str = "rental_system_12rooms.db"):
@@ -449,7 +445,6 @@ class RentalDB:
         except Exception as e:
             logger.error(f"Schema 修復失敗: {e}")
 
-    # ===== 房客管理 =====
     def room_exists(self, room: str) -> bool:
         with self._get_connection() as conn:
             return conn.execute("SELECT 1 FROM tenants WHERE room_number=? AND is_active=1", (room,)).fetchone() is not None
@@ -499,7 +494,6 @@ class RentalDB:
             return pd.read_sql("SELECT * FROM tenants WHERE is_active=1 ORDER BY room_number", conn)
 
     def get_tenant_by_id(self, tid: int):
-        """✅ 修復 #1：使用 Row Factory 避免 cursor.description 問題"""
         try:
             with self._get_connection() as conn:
                 conn.row_factory = sqlite3.Row
@@ -522,9 +516,7 @@ class RentalDB:
             logger.error(f"刪除失敗: {e}")
             return False, str(e)
 
-    # ===== 繳費計畫管理 =====
     def get_payment_schedule(self, room: Optional[str] = None, status: Optional[str] = None, year: Optional[int] = None) -> pd.DataFrame:
-        """✅ 修復 #2：使用參數化查詢防止 SQL 注入"""
         with self._get_connection() as conn:
             q = "SELECT * FROM payment_schedule WHERE 1=1"
             params = []
@@ -543,7 +535,6 @@ class RentalDB:
             return pd.read_sql(q, conn, params=params)
 
     def mark_payment_done(self, payment_id: int, paid_date: str, paid_amount: float, notes: str = ""):
-        """✅ 修復 #3：添加異常處理"""
         try:
             with self._get_connection() as conn:
                 conn.execute("""UPDATE payment_schedule SET status='已繳', paid_date=?, paid_amount=?, notes=?, updated_at=? WHERE id=?""",
@@ -577,9 +568,7 @@ class RentalDB:
                                 FROM payment_schedule WHERE status='未繳' AND due_date >= ? AND due_date <= ?
                                 ORDER BY due_date ASC""", conn, params=(today_str, future_date))
 
-    # ===== 租金管理 =====
     def batch_record_rent(self, room: str, tenant_name: str, start_year: int, start_month: int, months_count: int, base_rent: float, water_fee: float, discount: float, payment_method: str = "月繳", notes: str = ""):
-        """批量預填租金"""
         try:
             with self._get_connection() as conn:
                 actual_amount = base_rent + water_fee - discount
@@ -604,7 +593,6 @@ class RentalDB:
             return False, f"❌ 失敗: {str(e)}"
 
     def confirm_rent_payment(self, rent_id: int, paid_date: str, paid_amount: float = None):
-        """確認已繳費"""
         try:
             with self._get_connection() as conn:
                 row = conn.execute("SELECT actual_amount FROM rent_records WHERE id=?", (rent_id,)).fetchone()
@@ -637,7 +625,6 @@ class RentalDB:
             return pd.read_sql(q, conn)
 
     def get_pending_rents(self) -> pd.DataFrame:
-        """查詢待確認的租金"""
         with self._get_connection() as conn:
             return pd.read_sql("""SELECT id, room_number, tenant_name, year, month, actual_amount, status 
                                FROM rent_records WHERE status IN ('待確認', '未收') 
@@ -675,7 +662,6 @@ class RentalDB:
                                FROM rent_payments r JOIN tenants t ON r.room_number = t.room_number 
                                WHERE r.is_paid = 0 AND t.is_active = 1 ORDER BY r.year DESC, r.month DESC""", conn)
 
-    # ===== 電費管理 =====
     def add_electricity_period(self, year, ms, me):
         try:
             with self._get_connection() as conn:
@@ -748,9 +734,7 @@ class RentalDB:
             logger.error(f"電費計算失敗: {e}")
             return False, str(e), pd.DataFrame()
 
-    # ===== 支出管理 =====
     def add_expense(self, date, cat, amt, desc):
-        """✅ 修復 #3：添加異常處理"""
         try:
             with self._get_connection() as conn:
                 conn.execute("INSERT INTO expenses(expense_date, category, amount, description) VALUES(?, ?, ?, ?)",
@@ -765,9 +749,7 @@ class RentalDB:
         with self._get_connection() as conn:
             return pd.read_sql("SELECT * FROM expenses ORDER BY expense_date DESC LIMIT ?", conn, params=(limit,))
 
-    # ===== 備忘錄 =====
     def add_memo(self, text, prio="normal"):
-        """✅ 修復 #3：添加異常處理"""
         try:
             with self._get_connection() as conn:
                 conn.execute("INSERT INTO memos(memo_text, priority) VALUES(?, ?)", (text, prio))
@@ -806,7 +788,6 @@ class RentalDB:
 # UI 工具 (莫蘭迪護眼版)
 # ============================================================================
 def display_card(title: str, value: str, color: str = "blue"):
-    """莫蘭迪風格卡片"""
     colors = {
         "blue": "#f0f4f8",
         "green": "#edf2f0",
@@ -870,7 +851,6 @@ def display_room_card(room, status_color, status_text, detail_text):
 # ============================================================================
 
 def page_dashboard(db: RentalDB):
-    """✅ 修復 #8：顯示已過期租約"""
     st.header("📊 儀表板")
     
     tenants = db.get_tenants()
@@ -915,7 +895,6 @@ def page_dashboard(db: RentalDB):
     
     st.divider()
     
-    # ✅ 修復 #8：顯示已過期租約
     st.markdown("### ⚠️ 租約到期提醒")
     
     expiring_soon = []
@@ -934,7 +913,6 @@ def page_dashboard(db: RentalDB):
             except:
                 pass
     
-    # 先顯示已過期
     if expired:
         st.markdown("#### 🔴 租約已過期")
         cols = st.columns(4)
@@ -942,7 +920,6 @@ def page_dashboard(db: RentalDB):
             with cols[i % 4]:
                 st.error(f"🔴 **{room}** - {name}\\n已過期 **{days}** 天\\n({end_date})")
     
-    # 再顯示即將到期
     if expiring_soon:
         st.markdown("#### 🟡 租約即將到期 (45天內)")
         cols = st.columns(4)
@@ -1065,7 +1042,7 @@ def page_collect_rent(db: RentalDB):
             with col_calc1:
                 new_base = st.number_input(
                     "基本租金",
-                    value=base_rent,
+                    value=float(base_rent),
                     step=100.0,
                     min_value=0.0,
                     max_value=100000.0
@@ -1393,7 +1370,6 @@ def page_payment_tracker(db: RentalDB):
 
 
 def page_tenants(db: RentalDB):
-    """✅ 修復 #1：添加租客存在性檢查"""
     st.header("👥 房客管理")
     
     if "edit_id" not in st.session_state:
@@ -1410,8 +1386,8 @@ def page_tenants(db: RentalDB):
             n = c1.text_input("房客名稱")
             p = c2.text_input("聯絡電話")
             
-            dep = c1.number_input("押金", value=10000, min_value=0.0)
-            rent = c2.number_input("月租", value=6000, min_value=0.0)
+            dep = c1.number_input("押金", value=10000.0, min_value=0.0)
+            rent = c2.number_input("月租", value=6000.0, min_value=0.0)
             
             s = c1.date_input("租約開始")
             e = c2.date_input("租約結束", value=date.today() + timedelta(days=365))
@@ -1443,7 +1419,6 @@ def page_tenants(db: RentalDB):
             st.rerun()
     
     elif st.session_state.edit_id:
-        # ✅ 修復 #1：檢查租客是否存在
         t = db.get_tenant_by_id(st.session_state.edit_id)
         
         if not t:
@@ -1460,7 +1435,7 @@ def page_tenants(db: RentalDB):
             n = c1.text_input("房客名稱", value=t['tenant_name'])
             p = c2.text_input("聯絡電話", value=t['phone'] or "")
             
-            rent = c1.number_input("月租", value=t['base_rent'], min_value=0.0)
+            rent = c1.number_input("月租", value=float(t['base_rent']), min_value=0.0)
             
             e = c2.date_input("租約結束", value=datetime.strptime(t['lease_end'], "%Y-%m-%d"))
             
@@ -1498,7 +1473,6 @@ def page_tenants(db: RentalDB):
                     
                     st.write(f"💳 繳費方式: {row['payment_method']}")
                     
-                    # 顯示繳費排程
                     room_schedule = db.get_payment_schedule(room=row['room_number'], year=datetime.now().year)
                     if not room_schedule.empty:
                         st.markdown("**本年繳費排程：**")
@@ -1506,7 +1480,6 @@ def page_tenants(db: RentalDB):
                             status_icon = "✅" if schedule['status'] == "已繳" else "⏳"
                             st.caption(f"{status_icon} {schedule['payment_month']}月 - ${schedule['amount']:.0f}")
                     
-                    # 編輯和刪除按鈕
                     col1, col2 = st.columns(2)
                     
                     with col1:
@@ -1778,7 +1751,7 @@ def page_settings(db: RentalDB):
 
 def main():
     st.set_page_config(
-        page_title="幸福之家 v13.15",
+        page_title="幸福之家 v13.16",
         page_icon="🏠",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -1796,7 +1769,7 @@ def main():
     
     with st.sidebar:
         st.title("🏠 幸福之家")
-        st.caption("v13.15 完整修復版")
+        st.caption("v13.16 完整修復版")
         st.divider()
         
         menu = st.radio(
